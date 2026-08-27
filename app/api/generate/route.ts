@@ -1,0 +1,223 @@
+const MAX_FILE_BYTES = 25 * 1024 * 1024;
+const MAX_SOURCE_CHARS = 350_000;
+
+type OpenAIError = { error?: { message?: string } };
+
+function jsonError(message: string, status = 400) {
+  return Response.json({ error: message }, { status });
+}
+
+function bytesToBase64(bytes: Uint8Array) {
+  let binary = '';
+  const chunkSize = 0x8000;
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(offset, Math.min(offset + chunkSize, bytes.length)));
+  }
+  return btoa(binary);
+}
+
+function stripHtml(html: string) {
+  return html
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function publicDocumentUrl(value: string) {
+  const match = value.match(/^https:\/\/docs\.google\.com\/document\/d\/([^/]+)/i);
+  return match ? `https://docs.google.com/document/d/${match[1]}/export?format=txt` : value;
+}
+
+async function fetchLinkedSource(value: string) {
+  let parsed: URL;
+  try {
+    parsed = new URL(publicDocumentUrl(value));
+  } catch {
+    throw new Error('The source link is not a valid URL.');
+  }
+  if (!['http:', 'https:'].includes(parsed.protocol)) throw new Error('Only public http and https links are supported.');
+  const response = await fetch(parsed, {
+    redirect: 'follow',
+    headers: { 'User-Agent': 'Laxu-Focus/1.0 (+flashcard-generator)', Accept: 'text/html,text/plain,application/pdf' },
+  });
+  if (!response.ok) throw new Error(`The linked source returned ${response.status}. Check that it is public.`);
+  const contentType = response.headers.get('content-type') || '';
+  if (contentType.includes('application/pdf')) {
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    if (bytes.byteLength > MAX_FILE_BYTES) throw new Error('The linked PDF is larger than 25 MB.');
+    return {
+      content: {
+        type: 'input_file',
+        filename: parsed.pathname.split('/').pop() || 'linked-source.pdf',
+        file_data: `data:application/pdf;base64,${bytesToBase64(bytes)}`,
+      },
+      note: 'the linked PDF',
+    };
+  }
+  const raw = await response.text();
+  const text = contentType.includes('html') ? stripHtml(raw) : raw.trim();
+  if (text.length < 40) throw new Error('The linked page did not expose enough readable text.');
+  return { content: { type: 'input_text', text: `SOURCE CONTENT:\n${text.slice(0, MAX_SOURCE_CHARS)}` }, note: value };
+}
+
+async function transcribeAudio(file: File, apiKey: string) {
+  const form = new FormData();
+  form.set('file', file, file.name);
+  form.set('model', 'gpt-4o-mini-transcribe');
+  const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${apiKey}` },
+    body: form,
+  });
+  const payload = (await response.json()) as { text?: string } & OpenAIError;
+  if (!response.ok || !payload.text) throw new Error(payload.error?.message || 'The audio could not be transcribed.');
+  return payload.text;
+}
+
+function responseOutputText(payload: Record<string, unknown>) {
+  if (typeof payload.output_text === 'string') return payload.output_text;
+  const output = Array.isArray(payload.output) ? payload.output : [];
+  for (const item of output) {
+    if (!item || typeof item !== 'object') continue;
+    const content = Array.isArray((item as { content?: unknown[] }).content) ? (item as { content: unknown[] }).content : [];
+    for (const part of content) {
+      if (part && typeof part === 'object' && (part as { type?: string }).type === 'output_text' && typeof (part as { text?: string }).text === 'string') {
+        return (part as { text: string }).text;
+      }
+    }
+  }
+  return '';
+}
+
+export async function POST(request: Request) {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) return jsonError('OpenAI is not configured for this deployment yet.', 503);
+
+  try {
+    const form = await request.formData();
+    const sourceKind = String(form.get('sourceKind') || '');
+    const sourceName = String(form.get('sourceName') || 'Source material').slice(0, 180);
+    const globalPrompt = String(form.get('globalPrompt') || '').slice(0, 8_000);
+    const documentPrompt = String(form.get('documentPrompt') || '').slice(0, 8_000);
+    const requestedCount = Number(form.get('count') || 10);
+    const count = [5, 10, 15, 20].includes(requestedCount) ? requestedCount : 10;
+    let existingFronts: string[] = [];
+    try {
+      const parsed = JSON.parse(String(form.get('existingFronts') || '[]'));
+      if (Array.isArray(parsed)) existingFronts = parsed.filter((item): item is string => typeof item === 'string').slice(-100);
+    } catch {
+      existingFronts = [];
+    }
+
+    let sourceContent: Record<string, string>;
+    let sourceNote = sourceName;
+    if (sourceKind === 'file') {
+      const file = form.get('file');
+      if (!(file instanceof File) || file.size === 0) return jsonError('Choose a source file first.');
+      if (file.size > MAX_FILE_BYTES) return jsonError('Files must be 25 MB or smaller.');
+      if (file.type.startsWith('audio/') || /\.(mp3|m4a|wav)$/i.test(file.name)) {
+        const transcript = await transcribeAudio(file, apiKey);
+        sourceContent = { type: 'input_text', text: `AUDIO TRANSCRIPT:\n${transcript.slice(0, MAX_SOURCE_CHARS)}` };
+        sourceNote = `${file.name} transcript`;
+      } else if (file.type.startsWith('text/') || /\.(txt|md|csv)$/i.test(file.name)) {
+        const text = await file.text();
+        sourceContent = { type: 'input_text', text: `SOURCE CONTENT:\n${text.slice(0, MAX_SOURCE_CHARS)}` };
+      } else if (file.type.startsWith('image/')) {
+        const bytes = new Uint8Array(await file.arrayBuffer());
+        sourceContent = { type: 'input_image', image_url: `data:${file.type};base64,${bytesToBase64(bytes)}` };
+      } else {
+        const bytes = new Uint8Array(await file.arrayBuffer());
+        sourceContent = {
+          type: 'input_file',
+          filename: file.name,
+          file_data: `data:${file.type || 'application/octet-stream'};base64,${bytesToBase64(bytes)}`,
+        };
+      }
+    } else if (sourceKind === 'text') {
+      const text = String(form.get('content') || '').trim();
+      if (text.length < 40) return jsonError('The pasted source is too short to generate useful cards.');
+      sourceContent = { type: 'input_text', text: `SOURCE CONTENT:\n${text.slice(0, MAX_SOURCE_CHARS)}` };
+    } else if (sourceKind === 'url') {
+      const linked = await fetchLinkedSource(String(form.get('url') || ''));
+      sourceContent = linked.content;
+      sourceNote = linked.note;
+    } else {
+      return jsonError('Choose a source before generating cards.');
+    }
+
+    const instructions = [
+      'You create high-quality active-recall flashcards grounded only in the supplied source.',
+      'Each card must be self-contained, precise, and test one meaningful idea. Prefer explanation, comparison, causation, mechanism, and application over trivia or copied headings.',
+      'Do not invent facts. Avoid duplicates and near-duplicates. The back should directly and completely answer the front without unnecessary preamble.',
+      globalPrompt ? `GLOBAL STUDY PROMPT (applies across all sources):\n${globalPrompt}` : '',
+      documentPrompt ? `DOCUMENT-SPECIFIC PROMPT (additional focus for this source):\n${documentPrompt}` : '',
+    ].filter(Boolean).join('\n\n');
+
+    const existing = existingFronts.length
+      ? `\nDo not repeat or lightly rephrase any of these existing fronts:\n- ${existingFronts.join('\n- ')}`
+      : '';
+    const userPrompt = `Create exactly ${count} new candidate flashcards from “${sourceName}”. Give each 1–3 concise Anki-safe tags and a short source_hint identifying the relevant section, page if evident, or “${sourceNote}” if no more precise location is available.${existing}`;
+
+    const response = await fetch('https://api.openai.com/v1/responses', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: process.env.OPENAI_MODEL || 'gpt-5.6-luna',
+        store: false,
+        instructions,
+        input: [{ role: 'user', content: [{ type: 'input_text', text: userPrompt }, sourceContent] }],
+        text: {
+          format: {
+            type: 'json_schema',
+            name: 'flashcard_candidates',
+            strict: true,
+            schema: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                cards: {
+                  type: 'array',
+                  minItems: count,
+                  maxItems: count,
+                  items: {
+                    type: 'object',
+                    additionalProperties: false,
+                    properties: {
+                      front: { type: 'string' },
+                      back: { type: 'string' },
+                      tags: { type: 'array', minItems: 1, maxItems: 3, items: { type: 'string' } },
+                      source_hint: { type: 'string' },
+                    },
+                    required: ['front', 'back', 'tags', 'source_hint'],
+                  },
+                },
+              },
+              required: ['cards'],
+            },
+          },
+        },
+      }),
+    });
+
+    const payload = (await response.json()) as Record<string, unknown> & OpenAIError;
+    if (!response.ok) {
+      const apiMessage = payload.error?.message || 'OpenAI could not generate cards from this source.';
+      return jsonError(apiMessage, response.status >= 500 ? 502 : 400);
+    }
+    const output = responseOutputText(payload);
+    if (!output) return jsonError('The model returned no flashcards. Please try again.', 502);
+    const parsed = JSON.parse(output) as { cards?: unknown[] };
+    if (!Array.isArray(parsed.cards)) return jsonError('The model returned an unexpected result. Please try again.', 502);
+    return Response.json({ cards: parsed.cards });
+  } catch (caught) {
+    return jsonError(caught instanceof Error ? caught.message : 'Card generation failed.', 500);
+  }
+}
