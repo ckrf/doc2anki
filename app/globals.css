@@ -151,10 +151,15 @@ textarea:focus { border-color: #65a58b; box-shadow: 0 0 0 3px rgba(23, 107, 80, 
 .source-tabs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; margin: 28px 0 16px; padding: 4px; border-radius: 10px; background: #e8e9e4; }
 .source-tabs button { padding: 9px; border: 0; border-radius: 7px; background: transparent; color: var(--muted); font-size: 11px; font-weight: 700; }
 .source-tabs button.active { background: white; color: var(--ink); box-shadow: 0 1px 4px rgba(0,0,0,.08); }
+.source-error { margin: 0 0 14px; padding: 11px 13px; border: 1px solid #e3bcb5; border-radius: 10px; background: #fff0ed; color: #8a3c33; font-size: 11px; line-height: 1.45; }
+.source-error strong { display: block; margin-bottom: 2px; }
 .drop-zone { display: flex; min-height: 235px; flex-direction: column; align-items: center; justify-content: center; border: 1px dashed #aebbb3; border-radius: 14px; background: white; text-align: center; transition: .16s ease; cursor: pointer; }
 .drop-zone:hover, .drop-zone.dragging { border-color: var(--green); background: #f3f9f5; transform: translateY(-1px); }
 .drop-zone strong { margin-top: 14px; font-size: 13px; }
 .drop-zone small { margin-top: 7px; color: var(--muted); font-size: 10px; }
+.drop-hint { margin-top: 4px; color: var(--muted); font-size: 11px; }
+.source-file-input { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; }
+.drop-zone:focus-within { border-color: var(--green); box-shadow: 0 0 0 3px rgba(23, 107, 80, .08); }
 .upload-symbol { display: grid; width: 48px; height: 48px; place-items: center; border-radius: 14px; background: var(--mint); color: var(--green); font-size: 26px; }
 .source-form { display: flex; flex-direction: column; gap: 8px; padding-top: 8px; }
 .source-form label { margin-top: 6px; font-size: 11px; font-weight: 800; }

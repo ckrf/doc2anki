@@ -49,6 +49,7 @@ export default function Home() {
   const [loading, setLoading] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [error, setError] = useState('');
+  const [sourceError, setSourceError] = useState('');
   const [notice, setNotice] = useState('');
   const [sourceDialogOpen, setSourceDialogOpen] = useState(true);
   const [sourceTab, setSourceTab] = useState<'upload' | 'link' | 'text'>('upload');
@@ -65,10 +66,15 @@ export default function Home() {
     [cards, filter],
   );
 
-  function acceptFile(file?: File) {
-    if (!file) return;
+  async function acceptFile(file?: File) {
+    if (!file) {
+      setSourceError('No local file was received. Use “Choose a file” below, or use the Link tab for a public document.');
+      return;
+    }
     const allowed = [
       'application/pdf',
+      'application/x-pdf',
+      'application/acrobat',
       'text/plain',
       'text/markdown',
       'text/csv',
@@ -81,30 +87,49 @@ export default function Home() {
       'audio/x-m4a',
       'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
     ];
-    if (!allowed.includes(file.type) && !/\.(pdf|txt|md|csv|png|jpe?g|webp|mp3|m4a|wav|docx)$/i.test(file.name)) {
-      setError('That file type is not supported yet. Try PDF, DOCX, image, audio, Markdown, CSV, or plain text.');
+    const hasSupportedName = /\.(pdf|txt|md|csv|png|jpe?g|webp|mp3|m4a|wav|docx)$/i.test(file.name.trim());
+    const header = new Uint8Array(await file.slice(0, 5).arrayBuffer());
+    const hasPdfHeader = header.length >= 5 && String.fromCharCode(...header) === '%PDF-';
+    if (!allowed.includes(file.type.toLowerCase()) && !hasSupportedName && !hasPdfHeader) {
+      const detectedType = file.type ? ` (${file.type})` : '';
+      setSourceError(`“${file.name || 'This file'}” is not a supported document${detectedType}. Try PDF, DOCX, image, audio, Markdown, CSV, or plain text.`);
       return;
     }
     if (file.size > 25 * 1024 * 1024) {
-      setError('For this MVP, files must be 25 MB or smaller.');
+      setSourceError(`“${file.name}” is ${humanSize(file.size)}. For this MVP, files must be 25 MB or smaller.`);
       return;
     }
-    setSource({ kind: 'file', name: file.name, detail: `${humanSize(file.size)} · ${file.type || 'document'}`, file });
+    const normalizedFile = hasPdfHeader && !hasSupportedName
+      ? new File([file], file.name.toLowerCase().endsWith('.pdf') ? file.name : `${file.name || 'source'}.pdf`, { type: 'application/pdf' })
+      : file;
+    setSource({ kind: 'file', name: normalizedFile.name, detail: `${humanSize(normalizedFile.size)} · ${normalizedFile.type || 'document'}`, file: normalizedFile });
     setCards([]);
     setError('');
+    setSourceError('');
     setNotice('Source added. Add an optional document prompt, then generate your first candidates.');
     setSourceDialogOpen(false);
   }
 
   function onFileChange(event: ChangeEvent<HTMLInputElement>) {
-    acceptFile(event.target.files?.[0]);
+    void acceptFile(event.target.files?.[0]);
     event.target.value = '';
   }
 
-  function onDrop(event: DragEvent<HTMLDivElement>) {
+  function onDrop(event: DragEvent<HTMLElement>) {
     event.preventDefault();
     setDragging(false);
-    acceptFile(event.dataTransfer.files?.[0]);
+    void acceptFile(event.dataTransfer.files?.[0]);
+  }
+
+  function openSourceDialog() {
+    setSourceError('');
+    setError('');
+    setSourceDialogOpen(true);
+  }
+
+  function selectSourceTab(tab: 'upload' | 'link' | 'text') {
+    setSourceTab(tab);
+    setSourceError('');
   }
 
   function addLink() {
@@ -115,29 +140,31 @@ export default function Home() {
       setSource({ kind: 'url', name: parsed.hostname.replace(/^www\./, ''), detail: value, url: value });
       setCards([]);
       setError('');
+      setSourceError('');
       setNotice('Link added. Public webpages and public document links work best.');
       setSourceDialogOpen(false);
     } catch {
-      setError('Enter a complete public http:// or https:// link.');
+      setSourceError('Enter a complete public http:// or https:// link.');
     }
   }
 
   function addText() {
     if (draftText.trim().length < 40) {
-      setError('Paste at least a short paragraph so there is enough material to study.');
+      setSourceError('Paste at least a short paragraph so there is enough material to study.');
       return;
     }
     const title = textTitle.trim() || 'Pasted notes';
     setSource({ kind: 'text', name: title, detail: `${draftText.trim().split(/\s+/).length} words`, content: draftText.trim() });
     setCards([]);
     setError('');
+    setSourceError('');
     setNotice('Text added. You can now generate candidate cards.');
     setSourceDialogOpen(false);
   }
 
   async function generateCards() {
     if (!source) {
-      setSourceDialogOpen(true);
+      openSourceDialog();
       return;
     }
     setLoading(true);
@@ -267,14 +294,14 @@ export default function Home() {
             <h2>{source?.name || 'Choose something to study'}</h2>
             <p>{source?.detail || 'Upload a document, paste notes, or add a public link.'}</p>
           </div>
-          <button className="source-button" onClick={() => setSourceDialogOpen(true)}>＋ {source ? 'Change source' : 'Add source'}</button>
+          <button className="source-button" onClick={openSourceDialog}>＋ {source ? 'Change source' : 'Add source'}</button>
         </div>
 
         {error && <div className="message error-message" role="alert"><strong>Something needs attention</strong>{error}<button onClick={() => setError('')} aria-label="Dismiss error">×</button></div>}
         {notice && <div className="message notice-message" role="status">{notice}<button onClick={() => setNotice('')} aria-label="Dismiss message">×</button></div>}
 
         {!source ? (
-          <button className="empty-state" onClick={() => setSourceDialogOpen(true)}>
+          <button className="empty-state" onClick={openSourceDialog}>
             <span className="empty-icon">＋</span>
             <strong>Add your first source</strong>
             <small>PDF, DOCX, image, audio, pasted text, or public link</small>
@@ -355,24 +382,27 @@ export default function Home() {
             <h2 id="source-dialog-title">What are you studying?</h2>
             <p>Choose one source for this deck. You can replace it whenever you like.</p>
             <div className="source-tabs" role="tablist">
-              <button className={sourceTab === 'upload' ? 'active' : ''} onClick={() => setSourceTab('upload')}>Upload</button>
-              <button className={sourceTab === 'link' ? 'active' : ''} onClick={() => setSourceTab('link')}>Link</button>
-              <button className={sourceTab === 'text' ? 'active' : ''} onClick={() => setSourceTab('text')}>Paste text</button>
+              <button className={sourceTab === 'upload' ? 'active' : ''} onClick={() => selectSourceTab('upload')}>Upload</button>
+              <button className={sourceTab === 'link' ? 'active' : ''} onClick={() => selectSourceTab('link')}>Link</button>
+              <button className={sourceTab === 'text' ? 'active' : ''} onClick={() => selectSourceTab('text')}>Paste text</button>
             </div>
 
+            {sourceError && <div className="source-error" role="alert"><strong>Couldn’t add that source</strong>{sourceError}</div>}
+
             {sourceTab === 'upload' && (
-              <div
+              <label
+                htmlFor="source-file"
                 className={`drop-zone ${dragging ? 'dragging' : ''}`}
                 onDragOver={(event) => { event.preventDefault(); setDragging(true); }}
                 onDragLeave={() => setDragging(false)}
                 onDrop={onDrop}
-                onClick={() => fileInput.current?.click()}
               >
-                <input ref={fileInput} type="file" hidden onChange={onFileChange} accept=".pdf,.docx,.txt,.md,.csv,.png,.jpg,.jpeg,.webp,.mp3,.m4a,.wav" />
+                <input id="source-file" ref={fileInput} className="source-file-input" type="file" onChange={onFileChange} accept=".pdf,.docx,.txt,.md,.csv,.png,.jpg,.jpeg,.webp,.mp3,.m4a,.wav,application/pdf" />
                 <span className="upload-symbol">↑</span>
-                <strong>Drop a file here, or choose one</strong>
+                <strong>Choose a file</strong>
+                <span className="drop-hint">or drop a local file here</span>
                 <small>PDF, DOCX, text, image, or audio · up to 25 MB</small>
-              </div>
+              </label>
             )}
 
             {sourceTab === 'link' && (
