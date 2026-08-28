@@ -2,6 +2,10 @@ const MAX_FILE_BYTES = 25 * 1024 * 1024;
 const MAX_SOURCE_CHARS = 350_000;
 
 type OpenAIError = { error?: { message?: string } };
+type SourceContent =
+  | { type: 'input_text'; text: string }
+  | { type: 'input_file'; filename: string; file_data: string }
+  | { type: 'input_image'; image_url: string };
 
 function jsonError(message: string, status = 400) {
   return Response.json({ error: message }, { status });
@@ -36,7 +40,7 @@ function publicDocumentUrl(value: string) {
   return match ? `https://docs.google.com/document/d/${match[1]}/export?format=txt` : value;
 }
 
-async function fetchLinkedSource(value: string) {
+async function fetchLinkedSource(value: string): Promise<{ content: SourceContent; note: string }> {
   let parsed: URL;
   try {
     parsed = new URL(publicDocumentUrl(value));
@@ -117,7 +121,7 @@ export async function POST(request: Request) {
       existingFronts = [];
     }
 
-    let sourceContent: Record<string, string>;
+    let sourceContent: SourceContent;
     let sourceNote = sourceName;
     if (sourceKind === 'file') {
       const file = form.get('file');

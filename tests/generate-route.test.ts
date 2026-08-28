@@ -1,0 +1,75 @@
+// @vitest-environment node
+
+import { afterEach, describe, expect, test, vi } from 'vitest';
+
+import { POST } from '../app/api/generate/route';
+import nextConfig from '../next.config';
+
+const originalApiKey = process.env.OPENAI_API_KEY;
+const originalModel = process.env.OPENAI_MODEL;
+
+afterEach(() => {
+  if (originalApiKey === undefined) delete process.env.OPENAI_API_KEY;
+  else process.env.OPENAI_API_KEY = originalApiKey;
+  if (originalModel === undefined) delete process.env.OPENAI_MODEL;
+  else process.env.OPENAI_MODEL = originalModel;
+  vi.unstubAllGlobals();
+});
+
+describe('POST /api/generate', () => {
+  test('allows the server to receive the full 25 MB upload envelope', () => {
+    expect(nextConfig.experimental?.serverActions?.bodySizeLimit).toBe('30mb');
+  });
+
+  test('returns a useful configuration error without calling OpenAI when the API key is missing', async () => {
+    delete process.env.OPENAI_API_KEY;
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    const response = await POST(new Request('http://localhost/api/generate', { method: 'POST' }));
+    const payload = await response.json() as { error: string };
+
+    expect(response.status).toBe(503);
+    expect(payload.error).toContain('OpenAI is not configured');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  test('combines both prompt levels, includes prior fronts, and returns parsed cards', async () => {
+    process.env.OPENAI_API_KEY = 'test-key';
+    process.env.OPENAI_MODEL = 'test-model';
+    let capturedUrl = '';
+    let capturedInit: RequestInit | undefined;
+    vi.stubGlobal('fetch', vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      capturedUrl = String(url);
+      capturedInit = init;
+      return new Response(JSON.stringify({
+        output_text: JSON.stringify({
+          cards: [{ front: 'New question', back: 'New answer', tags: ['topic'], source_hint: 'Section 1' }],
+        }),
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }));
+
+    const form = new FormData();
+    form.set('sourceKind', 'text');
+    form.set('sourceName', 'Test source');
+    form.set('globalPrompt', 'Prefer mechanisms.');
+    form.set('documentPrompt', 'Focus on chapter two.');
+    form.set('count', '5');
+    form.set('content', 'This source contains enough words to exercise the generation endpoint without using a live model.');
+    form.set('existingFronts', JSON.stringify(['Existing question']));
+
+    const response = await POST(new Request('http://localhost/api/generate', { method: 'POST', body: form }));
+    const payload = await response.json() as { cards: Array<{ front: string }> };
+    const openAIRequest = JSON.parse(String(capturedInit?.body));
+
+    expect(response.status).toBe(200);
+    expect(capturedUrl).toBe('https://api.openai.com/v1/responses');
+    expect(openAIRequest.model).toBe('test-model');
+    expect(openAIRequest.store).toBe(false);
+    expect(openAIRequest.instructions).toContain('Prefer mechanisms.');
+    expect(openAIRequest.instructions).toContain('Focus on chapter two.');
+    expect(openAIRequest.input[0].content[0].text).toContain('Existing question');
+    expect(openAIRequest.input[0].content[1].text).toContain('This source contains enough words');
+    expect(payload.cards[0]?.front).toBe('New question');
+  });
+});
