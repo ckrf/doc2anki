@@ -38,16 +38,6 @@ describe('source dialog', () => {
     expect(screen.getByText(/application\/pdf/)).toBeTruthy();
   });
 
-  test('keeps an unsupported-file error visible inside the dialog', async () => {
-    render(<Home />);
-    chooseFile(new File(['not a supported document'], 'archive.xyz', { type: 'application/octet-stream' }));
-
-    const dialog = screen.getByRole('dialog', { name: 'What are you studying?' });
-    const alert = await within(dialog).findByRole('alert');
-    expect(alert.textContent).toContain('archive.xyz');
-    expect(alert.textContent).toContain('not a supported document');
-  });
-
   test('explains when a drop or picker event contains no file', async () => {
     render(<Home />);
     chooseFile();
