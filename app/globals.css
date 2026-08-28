@@ -20,7 +20,7 @@ body {
   font-family: Arial, Helvetica, sans-serif;
 }
 
-button, textarea, input { font: inherit; }
+button, textarea, input, select { font: inherit; }
 button { cursor: pointer; }
 button:disabled { cursor: not-allowed; opacity: .55; }
 
@@ -78,6 +78,13 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .prompt-panel textarea { min-height: 118px; padding: 13px; background: #fff; font-size: 13px; line-height: 1.5; }
 textarea:focus { border-color: #65a58b; box-shadow: 0 0 0 3px rgba(23, 107, 80, .08); }
 .field-help { margin: 7px 0 0; color: var(--muted); font-size: 11px; }
+.prompt-save-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 8px; }
+.prompt-save-row span { color: var(--muted); font-size: 10px; }
+.prompt-save-row button { padding: 6px 9px; border: 1px solid #bdd0c7; border-radius: 7px; background: #f4faf7; color: var(--green-dark); font-size: 10px; font-weight: 800; }
+.model-select { width: 100%; min-height: 42px; padding: 0 34px 0 11px; border: 1px solid #d4d7d1; border-radius: 9px; background: #fff; color: var(--ink); font-size: 11px; font-weight: 700; }
+.model-summary { display: flex; flex-direction: column; gap: 5px; margin-top: 9px; padding: 12px; border: 1px solid #d9ded7; border-radius: 10px; background: #fff; }
+.model-summary strong { color: var(--green-dark); font-size: 11px; }
+.model-summary span, .model-summary small { color: var(--muted); font-size: 10px; line-height: 1.4; }
 .prompt-note { margin-top: 28px; padding: 16px; border: 1px solid #d9ded7; border-radius: 12px; background: #f0f5f1; color: var(--muted); font-size: 11px; line-height: 1.5; }
 .prompt-note strong { display: block; margin-bottom: 5px; color: var(--green-dark); font-size: 11px; }
 
@@ -103,7 +110,14 @@ textarea:focus { border-color: #65a58b; box-shadow: 0 0 0 3px rgba(23, 107, 80, 
 .card-number { padding-top: 2px; color: #9aa29e; font: 600 11px monospace; }
 .card-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 13px; }
 .card-fields label { color: var(--muted); font-size: 10px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+.card-field { display: flex; min-width: 0; flex-direction: column; gap: 8px; }
+.field-heading { display: flex; min-height: 14px; align-items: center; justify-content: space-between; gap: 8px; }
+.field-heading button { padding: 0; border: 0; background: transparent; color: var(--green); font-size: 10px; font-weight: 700; }
 .card-fields textarea { min-height: 92px; padding: 12px; background: #fbfcfa; font-size: 13px; line-height: 1.45; }
+.hidden-answer { display: flex; min-height: 92px; width: 100%; flex-direction: column; align-items: center; justify-content: center; gap: 5px; border: 1px dashed #bdc7c1; border-radius: 10px; background: #f6f7f3; color: var(--muted); }
+.hidden-answer:hover { border-color: #6c9e89; background: #f1f8f4; color: var(--green-dark); }
+.hidden-answer span { font-size: 10px; text-transform: uppercase; letter-spacing: .08em; }
+.hidden-answer strong { font-size: 12px; }
 .tag-row { grid-column: 1 / -1; display: flex; align-items: center; margin-top: 3px; }
 .tag-row span { margin-right: 5px; padding: 5px 8px; border-radius: 99px; background: var(--mint); color: var(--green-dark); font-size: 10px; font-weight: 700; }
 .tag-row .batch-tag { background: #eeeae1; color: #6d665a; }
@@ -180,11 +194,7 @@ textarea:focus { border-color: #65a58b; box-shadow: 0 0 0 3px rgba(23, 107, 80, 
   .candidate-card { grid-template-columns: 24px 1fr; padding: 16px; }
   .card-number { display: none; }
   .card-fields { grid-template-columns: 1fr; }
-  .card-fields label:nth-of-type(1) { grid-row: 1; }
-  .card-fields textarea:nth-of-type(1) { grid-row: 2; }
-  .card-fields label:nth-of-type(2) { grid-row: 3; }
-  .card-fields textarea:nth-of-type(2) { grid-row: 4; }
-  .tag-row { grid-column: 1; grid-row: 5; flex-wrap: wrap; }
+  .tag-row { grid-column: 1; flex-wrap: wrap; }
   .tag-row em { width: 100%; margin: 7px 0 0; }
   .tag-row button { margin-left: 0; }
   .generation-controls { flex-wrap: wrap; }

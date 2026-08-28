@@ -1,6 +1,15 @@
 'use client';
 
-import { ChangeEvent, DragEvent, useMemo, useRef, useState } from 'react';
+import { ChangeEvent, DragEvent, useEffect, useMemo, useRef, useState } from 'react';
+
+import {
+  DEFAULT_MODEL_ID,
+  MODEL_CATALOG,
+  estimateTokenCostUsd,
+  getModelConfig,
+  isModelId,
+  type ModelId,
+} from '../lib/model-catalog';
 
 type Source = {
   kind: 'file' | 'text' | 'url';
@@ -9,6 +18,7 @@ type Source = {
   file?: File;
   content?: string;
   url?: string;
+  autoTitle?: boolean;
 };
 
 type CandidateCard = {
@@ -18,16 +28,32 @@ type CandidateCard = {
   tags: string[];
   sourceHint: string;
   selected: boolean;
+  revealed: boolean;
   batch: number;
 };
 
 type GenerationPayload = {
   cards?: Array<{ front: string; back: string; tags?: string[]; source_hint?: string }>;
+  sourceTitle?: string;
+  usage?: {
+    model: ModelId;
+    inputTokens: number;
+    cachedInputTokens: number;
+    outputTokens: number;
+    estimatedCostUsd: number;
+  };
   error?: string;
 };
 
+type CostHistory = Partial<Record<ModelId, { costUsd: number; cards: number; runs: number }>>;
+
 const DEFAULT_GLOBAL_PROMPT =
   'Prioritize conceptual relationships, mechanisms, and questions that require active recall. Avoid trivia, vague prompts, and simple recognition.';
+const GLOBAL_PROMPT_STORAGE_KEY = 'laxu-focus.global-prompt.v1';
+const MODEL_STORAGE_KEY = 'laxu-focus.model.v1';
+const COST_HISTORY_STORAGE_KEY = 'laxu-focus.cost-history.v1';
+const STARTING_INPUT_TOKENS_PER_CARD = 2_500;
+const STARTING_OUTPUT_TOKENS_PER_CARD = 200;
 
 function uid() {
   return typeof crypto !== 'undefined' && 'randomUUID' in crypto
@@ -43,6 +69,26 @@ function humanSize(bytes: number) {
 
 function safeDeckName(name: string) {
   return name.replace(/\.[^/.]+$/, '').replace(/[\\/:*?"<>|]/g, '-').trim() || 'Laxu Flashcards';
+}
+
+function isOpaqueFileName(name: string) {
+  const stem = name.replace(/\.[^/.]+$/, '');
+  return stem.length >= 24 && /^[A-Za-z0-9_-]+$/.test(stem);
+}
+
+function cleanGeneratedTitle(title: string) {
+  return title
+    .replace(/\.(pdf|docx|txt|md|csv)$/i, '')
+    .replace(/[\\/:*?"<>|]/g, '-')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 120);
+}
+
+function formatUsd(value: number) {
+  if (value < 0.001) return `$${value.toFixed(5)}`;
+  if (value < 0.01) return `$${value.toFixed(4)}`;
+  return `$${value.toFixed(3)}`;
 }
 
 async function readGenerationPayload(response: Response): Promise<GenerationPayload> {
@@ -61,7 +107,10 @@ async function readGenerationPayload(response: Response): Promise<GenerationPayl
 
 export default function Home() {
   const [globalPrompt, setGlobalPrompt] = useState(DEFAULT_GLOBAL_PROMPT);
+  const [savedGlobalPrompt, setSavedGlobalPrompt] = useState(DEFAULT_GLOBAL_PROMPT);
   const [documentPrompt, setDocumentPrompt] = useState('');
+  const [modelId, setModelId] = useState<ModelId>(DEFAULT_MODEL_ID);
+  const [costHistory, setCostHistory] = useState<CostHistory>({});
   const [source, setSource] = useState<Source | null>(null);
   const [cards, setCards] = useState<CandidateCard[]>([]);
   const [candidateCount, setCandidateCount] = useState(10);
@@ -80,10 +129,75 @@ export default function Home() {
   const fileInput = useRef<HTMLInputElement>(null);
 
   const selectedCount = cards.filter((card) => card.selected).length;
+  const selectedModel = getModelConfig(modelId);
+  const selectedModelHistory = costHistory[modelId];
+  const selectedCostPerCard = selectedModelHistory?.cards
+    ? selectedModelHistory.costUsd / selectedModelHistory.cards
+    : estimateTokenCostUsd(modelId, STARTING_INPUT_TOKENS_PER_CARD, 0, STARTING_OUTPUT_TOKENS_PER_CARD);
   const visibleCards = useMemo(
     () => (filter === 'selected' ? cards.filter((card) => card.selected) : cards),
     [cards, filter],
   );
+
+  useEffect(() => {
+    const restoreTimer = window.setTimeout(() => {
+      const storedPrompt = localStorage.getItem(GLOBAL_PROMPT_STORAGE_KEY);
+      if (storedPrompt !== null) {
+        setGlobalPrompt(storedPrompt);
+        setSavedGlobalPrompt(storedPrompt);
+      }
+
+      const storedModel = localStorage.getItem(MODEL_STORAGE_KEY);
+      if (storedModel && isModelId(storedModel)) setModelId(storedModel);
+
+      const storedHistory = localStorage.getItem(COST_HISTORY_STORAGE_KEY);
+      if (storedHistory) {
+        try {
+          const parsed = JSON.parse(storedHistory) as CostHistory;
+          if (parsed && typeof parsed === 'object') setCostHistory(parsed);
+        } catch {
+          localStorage.removeItem(COST_HISTORY_STORAGE_KEY);
+        }
+      }
+    }, 0);
+    return () => window.clearTimeout(restoreTimer);
+  }, []);
+
+  function saveGlobalPrompt() {
+    localStorage.setItem(GLOBAL_PROMPT_STORAGE_KEY, globalPrompt);
+    setSavedGlobalPrompt(globalPrompt);
+    setNotice('Global study prompt saved for future sessions in this browser.');
+  }
+
+  function chooseModel(value: string) {
+    if (!isModelId(value)) return;
+    setModelId(value);
+    localStorage.setItem(MODEL_STORAGE_KEY, value);
+  }
+
+  function estimatedCardCost(candidateModel: ModelId) {
+    const history = costHistory[candidateModel];
+    return history?.cards
+      ? history.costUsd / history.cards
+      : estimateTokenCostUsd(candidateModel, STARTING_INPUT_TOKENS_PER_CARD, 0, STARTING_OUTPUT_TOKENS_PER_CARD);
+  }
+
+  function recordUsage(payload: GenerationPayload['usage'], cardsReturned: number) {
+    if (!payload || cardsReturned < 1 || payload.estimatedCostUsd < 0) return;
+    setCostHistory((current) => {
+      const previous = current[payload.model] ?? { costUsd: 0, cards: 0, runs: 0 };
+      const next: CostHistory = {
+        ...current,
+        [payload.model]: {
+          costUsd: previous.costUsd + payload.estimatedCostUsd,
+          cards: previous.cards + cardsReturned,
+          runs: previous.runs + 1,
+        },
+      };
+      localStorage.setItem(COST_HISTORY_STORAGE_KEY, JSON.stringify(next));
+      return next;
+    });
+  }
 
   async function acceptFile(file?: File) {
     if (!file) {
@@ -121,7 +235,14 @@ export default function Home() {
     const normalizedFile = hasPdfHeader && !hasSupportedName
       ? new File([file], file.name.toLowerCase().endsWith('.pdf') ? file.name : `${file.name || 'source'}.pdf`, { type: 'application/pdf' })
       : file;
-    setSource({ kind: 'file', name: normalizedFile.name, detail: `${humanSize(normalizedFile.size)} · ${normalizedFile.type || 'document'}`, file: normalizedFile });
+    const autoTitle = isOpaqueFileName(normalizedFile.name);
+    setSource({
+      kind: 'file',
+      name: autoTitle ? 'Untitled PDF' : normalizedFile.name,
+      detail: `${humanSize(normalizedFile.size)} · ${normalizedFile.type || 'document'}${autoTitle ? ' · title will be detected during generation' : ''}`,
+      file: normalizedFile,
+      autoTitle,
+    });
     setCards([]);
     setError('');
     setSourceError('');
@@ -195,6 +316,7 @@ export default function Home() {
       form.set('sourceName', source.name);
       form.set('globalPrompt', globalPrompt.trim());
       form.set('documentPrompt', documentPrompt.trim());
+      form.set('model', modelId);
       form.set('count', String(candidateCount));
       form.set('existingFronts', JSON.stringify(cards.map((card) => card.front)));
       if (source.file) form.set('file', source.file);
@@ -205,18 +327,35 @@ export default function Home() {
       const payload = await readGenerationPayload(response);
       if (!response.ok || !payload.cards) throw new Error(payload.error || 'The cards could not be generated.');
 
+      let resolvedSourceName = source.name;
+      if (source.autoTitle && payload.sourceTitle) {
+        const generatedTitle = cleanGeneratedTitle(payload.sourceTitle);
+        if (generatedTitle) {
+          const extension = source.file?.name.match(/\.[A-Za-z0-9]+$/)?.[0] ?? '';
+          resolvedSourceName = `${generatedTitle}${extension}`;
+          setSource((current) => current?.autoTitle
+            ? { ...current, name: resolvedSourceName, autoTitle: false }
+            : current);
+        }
+      }
+
       const batch = cards.reduce((highest, card) => Math.max(highest, card.batch), 0) + 1;
       const incoming = payload.cards.map((card) => ({
         id: uid(),
         front: card.front,
         back: card.back,
         tags: card.tags?.length ? card.tags : ['laxu'],
-        sourceHint: card.source_hint || source.name,
+        sourceHint: card.source_hint || resolvedSourceName,
         selected: false,
+        revealed: false,
         batch,
       }));
       setCards((current) => [...current, ...incoming]);
-      setNotice(`${incoming.length} new candidate${incoming.length === 1 ? '' : 's'} added to the review queue.`);
+      recordUsage(payload.usage, incoming.length);
+      const costMessage = payload.usage
+        ? ` Estimated API cost: ${formatUsd(payload.usage.estimatedCostUsd)} (${formatUsd(payload.usage.estimatedCostUsd / incoming.length)}/card).`
+        : '';
+      setNotice(`${incoming.length} new candidate${incoming.length === 1 ? '' : 's'} added to the review queue.${costMessage}`);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Something went wrong while generating cards.');
     } finally {
@@ -230,6 +369,10 @@ export default function Home() {
 
   function toggleCard(id: string) {
     setCards((current) => current.map((card) => (card.id === id ? { ...card, selected: !card.selected } : card)));
+  }
+
+  function toggleAnswer(id: string) {
+    setCards((current) => current.map((card) => (card.id === id ? { ...card, revealed: !card.revealed } : card)));
   }
 
   function removeCard(id: string) {
@@ -288,7 +431,11 @@ export default function Home() {
           onChange={(event) => setGlobalPrompt(event.target.value)}
           placeholder="What should every deck focus on?"
         />
-        <p className="field-help">Applied to every source you generate from.</p>
+        <div className="prompt-save-row">
+          <span>{globalPrompt === savedGlobalPrompt ? 'Saved' : 'Unsaved changes'}</span>
+          <button onClick={saveGlobalPrompt} disabled={globalPrompt === savedGlobalPrompt}>Save global prompt</button>
+        </div>
+        <p className="field-help">Applied to every source you generate from and saved in this browser.</p>
         <label htmlFor="document-prompt">This document</label>
         <textarea
           id="document-prompt"
@@ -297,6 +444,21 @@ export default function Home() {
           placeholder="Optional: emphasize a chapter, skill, question style, or level of detail."
         />
         <p className="field-help">Combined with the global prompt for this source.</p>
+        <label htmlFor="generation-model">Generation model</label>
+        <select id="generation-model" className="model-select" value={modelId} onChange={(event) => chooseModel(event.target.value)}>
+          {MODEL_CATALOG.map((model) => (
+            <option key={model.id} value={model.id}>
+              {model.label} · ≈{formatUsd(estimatedCardCost(model.id))}/card
+            </option>
+          ))}
+        </select>
+        <div className="model-summary">
+          <strong>Estimated cost/card: ≈{formatUsd(selectedCostPerCard)}</strong>
+          <span>{selectedModelHistory
+            ? `Based on ${selectedModelHistory.cards} generated cards across ${selectedModelHistory.runs} run${selectedModelHistory.runs === 1 ? '' : 's'}.`
+            : 'Starting estimate; it will be replaced by your observed average after the first run.'}</span>
+          <small>{selectedModel.description} ${selectedModel.inputUsdPerMillion}/M input · ${selectedModel.outputUsdPerMillion}/M output. Actual cost varies with document length and batch size.</small>
+        </div>
         <div className="prompt-note">
           <strong>Prompt hierarchy</strong>
           Global guidance sets your study style. Document guidance narrows the focus without replacing it.
@@ -372,10 +534,24 @@ export default function Home() {
                   </div>
                   <div className="card-number">{String(cards.indexOf(card) + 1).padStart(2, '0')}</div>
                   <div className="card-fields">
-                    <label htmlFor={`front-${card.id}`}>Front</label>
-                    <label htmlFor={`back-${card.id}`}>Back</label>
-                    <textarea id={`front-${card.id}`} value={card.front} onChange={(event) => updateCard(card.id, 'front', event.target.value)} />
-                    <textarea id={`back-${card.id}`} value={card.back} onChange={(event) => updateCard(card.id, 'back', event.target.value)} />
+                    <div className="card-field">
+                      <label htmlFor={`front-${card.id}`}>Front</label>
+                      <textarea id={`front-${card.id}`} value={card.front} onChange={(event) => updateCard(card.id, 'front', event.target.value)} />
+                    </div>
+                    <div className="card-field">
+                      <div className="field-heading">
+                        <label htmlFor={card.revealed ? `back-${card.id}` : undefined}>Back</label>
+                        {card.revealed && <button onClick={() => toggleAnswer(card.id)}>Hide answer</button>}
+                      </div>
+                      {card.revealed ? (
+                        <textarea id={`back-${card.id}`} aria-label="Back" value={card.back} onChange={(event) => updateCard(card.id, 'back', event.target.value)} />
+                      ) : (
+                        <button className="hidden-answer" aria-label="Show and edit answer" onClick={() => toggleAnswer(card.id)}>
+                          <span>Answer hidden</span>
+                          <strong>Show and edit answer</strong>
+                        </button>
+                      )}
+                    </div>
                     <div className="tag-row">
                       <span className="batch-tag">Batch {card.batch}</span>
                       {card.tags.slice(0, 3).map((tag) => <span key={tag}>{tag}</span>)}

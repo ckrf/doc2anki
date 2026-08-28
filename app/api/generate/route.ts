@@ -1,7 +1,14 @@
+import { DEFAULT_MODEL_ID, estimateTokenCostUsd, isModelId } from '../../../lib/model-catalog';
+
 const MAX_FILE_BYTES = 25 * 1024 * 1024;
 const MAX_SOURCE_CHARS = 350_000;
 
 type OpenAIError = { error?: { message?: string } };
+type OpenAIUsage = {
+  input_tokens?: number;
+  input_tokens_details?: { cached_tokens?: number };
+  output_tokens?: number;
+};
 type SourceContent =
   | { type: 'input_text'; text: string }
   | { type: 'input_file'; filename: string; file_data: string }
@@ -111,6 +118,11 @@ export async function POST(request: Request) {
     const sourceName = String(form.get('sourceName') || 'Source material').slice(0, 180);
     const globalPrompt = String(form.get('globalPrompt') || '').slice(0, 8_000);
     const documentPrompt = String(form.get('documentPrompt') || '').slice(0, 8_000);
+    const requestedModel = String(form.get('model') || '');
+    const configuredModel = String(process.env.OPENAI_MODEL || '');
+    const model = isModelId(requestedModel)
+      ? requestedModel
+      : isModelId(configuredModel) ? configuredModel : DEFAULT_MODEL_ID;
     const requestedCount = Number(form.get('count') || 10);
     const count = [5, 10, 15, 20].includes(requestedCount) ? requestedCount : 10;
     let existingFronts: string[] = [];
@@ -161,6 +173,7 @@ export async function POST(request: Request) {
       'You create high-quality active-recall flashcards grounded only in the supplied source.',
       'Each card must be self-contained, precise, and test one meaningful idea. Prefer explanation, comparison, causation, mechanism, and application over trivia or copied headings.',
       'Do not invent facts. Avoid duplicates and near-duplicates. The back should directly and completely answer the front without unnecessary preamble.',
+      'Also identify the source with a concise, descriptive source_title. Prefer an evident book or article title plus chapter number and chapter topic. Never use an opaque file ID as the title.',
       globalPrompt ? `GLOBAL STUDY PROMPT (applies across all sources):\n${globalPrompt}` : '',
       documentPrompt ? `DOCUMENT-SPECIFIC PROMPT (additional focus for this source):\n${documentPrompt}` : '',
     ].filter(Boolean).join('\n\n');
@@ -174,7 +187,7 @@ export async function POST(request: Request) {
       method: 'POST',
       headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: process.env.OPENAI_MODEL || 'gpt-5.6-luna',
+        model,
         store: false,
         instructions,
         input: [{ role: 'user', content: [{ type: 'input_text', text: userPrompt }, sourceContent] }],
@@ -187,6 +200,7 @@ export async function POST(request: Request) {
               type: 'object',
               additionalProperties: false,
               properties: {
+                source_title: { type: 'string' },
                 cards: {
                   type: 'array',
                   minItems: count,
@@ -204,7 +218,7 @@ export async function POST(request: Request) {
                   },
                 },
               },
-              required: ['cards'],
+              required: ['source_title', 'cards'],
             },
           },
         },
@@ -218,9 +232,24 @@ export async function POST(request: Request) {
     }
     const output = responseOutputText(payload);
     if (!output) return jsonError('The model returned no flashcards. Please try again.', 502);
-    const parsed = JSON.parse(output) as { cards?: unknown[] };
+    const parsed = JSON.parse(output) as { source_title?: string; cards?: unknown[] };
     if (!Array.isArray(parsed.cards)) return jsonError('The model returned an unexpected result. Please try again.', 502);
-    return Response.json({ cards: parsed.cards });
+    const rawUsage = payload.usage as OpenAIUsage | undefined;
+    const inputTokens = Math.max(0, Number(rawUsage?.input_tokens) || 0);
+    const cachedInputTokens = Math.max(0, Number(rawUsage?.input_tokens_details?.cached_tokens) || 0);
+    const outputTokens = Math.max(0, Number(rawUsage?.output_tokens) || 0);
+    const usage = rawUsage ? {
+      model,
+      inputTokens,
+      cachedInputTokens,
+      outputTokens,
+      estimatedCostUsd: estimateTokenCostUsd(model, inputTokens, cachedInputTokens, outputTokens),
+    } : undefined;
+    return Response.json({
+      cards: parsed.cards,
+      sourceTitle: typeof parsed.source_title === 'string' ? parsed.source_title : undefined,
+      usage,
+    });
   } catch (caught) {
     return jsonError(caught instanceof Error ? caught.message : 'Card generation failed.', 500);
   }

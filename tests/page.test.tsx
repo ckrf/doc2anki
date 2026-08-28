@@ -76,12 +76,20 @@ describe('candidate review', () => {
 
   test('sends both prompt levels, supports editing and selection, and avoids repeats when generating more', async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      sourceTitle: 'Test notes',
       cards: [{
         front: 'Original question',
         back: 'Original answer',
         tags: ['concept'],
         source_hint: 'Test notes',
       }],
+      usage: {
+        model: 'gpt-5.6-terra',
+        inputTokens: 1000,
+        cachedInputTokens: 0,
+        outputTokens: 100,
+        estimatedCostUsd: 0.0032,
+      },
     }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
     vi.stubGlobal('fetch', fetchMock);
     render(<Home />);
@@ -95,13 +103,21 @@ describe('candidate review', () => {
 
     fireEvent.change(screen.getByLabelText('Global study prompt'), { target: { value: 'Global focus' } });
     fireEvent.change(screen.getByLabelText('This document'), { target: { value: 'Document focus' } });
+    fireEvent.change(screen.getByLabelText('Generation model'), { target: { value: 'gpt-5.6-terra' } });
     fireEvent.click(screen.getByRole('button', { name: 'Generate candidates' }));
 
     await screen.findByDisplayValue('Original question');
+    expect(screen.queryByLabelText('Back')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Show and edit answer' }));
+    const back = screen.getByLabelText('Back') as HTMLTextAreaElement;
+    fireEvent.change(back, { target: { value: 'Edited answer' } });
+    expect(back.value).toBe('Edited answer');
     const firstRequest = fetchMock.mock.calls[0]?.[1] as RequestInit;
     const firstForm = firstRequest.body as FormData;
     expect(firstForm.get('globalPrompt')).toBe('Global focus');
     expect(firstForm.get('documentPrompt')).toBe('Document focus');
+    expect(firstForm.get('model')).toBe('gpt-5.6-terra');
+    expect(localStorage.getItem('laxu-focus.model.v1')).toBe('gpt-5.6-terra');
 
     const front = screen.getByLabelText('Front') as HTMLTextAreaElement;
     fireEvent.change(front, { target: { value: 'Edited question' } });
@@ -114,5 +130,35 @@ describe('candidate review', () => {
     const secondRequest = fetchMock.mock.calls[1]?.[1] as RequestInit;
     const secondForm = secondRequest.body as FormData;
     expect(JSON.parse(String(secondForm.get('existingFronts')))).toEqual(['Edited question']);
+  });
+
+  test('saves the global prompt and restores it in a later session', async () => {
+    const firstSession = render(<Home />);
+    const prompt = screen.getByLabelText('Global study prompt') as HTMLTextAreaElement;
+    fireEvent.change(prompt, { target: { value: 'Saved study preference' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save global prompt' }));
+    expect(localStorage.getItem('laxu-focus.global-prompt.v1')).toBe('Saved study preference');
+
+    firstSession.unmount();
+    render(<Home />);
+    await waitFor(() => expect((screen.getByLabelText('Global study prompt') as HTMLTextAreaElement).value).toBe('Saved study preference'));
+  });
+
+  test('replaces an opaque PDF identifier with the title inferred during generation', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      sourceTitle: 'Developmental Biology — Chapter 5',
+      cards: [{ front: 'Question', back: 'Answer', tags: ['biology'], source_hint: 'Chapter 5' }],
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } })));
+    render(<Home />);
+    chooseFile(new File(
+      ['%PDF-1.7\nopaque filename test'],
+      '1IUr9u-7JZhDX7lb6tSBqczHjGU1AcrDZ',
+      { type: 'application/octet-stream' },
+    ));
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(screen.getByRole('heading', { name: 'Untitled PDF' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Generate candidates' }));
+    expect(await screen.findByRole('heading', { name: 'Developmental Biology — Chapter 5.pdf' })).toBeTruthy();
   });
 });

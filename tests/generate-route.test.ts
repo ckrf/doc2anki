@@ -36,7 +36,7 @@ describe('POST /api/generate', () => {
 
   test('combines both prompt levels, includes prior fronts, and returns parsed cards', async () => {
     process.env.OPENAI_API_KEY = 'test-key';
-    process.env.OPENAI_MODEL = 'test-model';
+    process.env.OPENAI_MODEL = 'gpt-5.6-luna';
     let capturedUrl = '';
     let capturedInit: RequestInit | undefined;
     vi.stubGlobal('fetch', vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
@@ -44,8 +44,10 @@ describe('POST /api/generate', () => {
       capturedInit = init;
       return new Response(JSON.stringify({
         output_text: JSON.stringify({
+          source_title: 'Test source',
           cards: [{ front: 'New question', back: 'New answer', tags: ['topic'], source_hint: 'Section 1' }],
         }),
+        usage: { input_tokens: 1_000, input_tokens_details: { cached_tokens: 100 }, output_tokens: 500 },
       }), { status: 200, headers: { 'Content-Type': 'application/json' } });
     }));
 
@@ -54,22 +56,30 @@ describe('POST /api/generate', () => {
     form.set('sourceName', 'Test source');
     form.set('globalPrompt', 'Prefer mechanisms.');
     form.set('documentPrompt', 'Focus on chapter two.');
+    form.set('model', 'gpt-5.6-terra');
     form.set('count', '5');
     form.set('content', 'This source contains enough words to exercise the generation endpoint without using a live model.');
     form.set('existingFronts', JSON.stringify(['Existing question']));
 
     const response = await POST(new Request('http://localhost/api/generate', { method: 'POST', body: form }));
-    const payload = await response.json() as { cards: Array<{ front: string }> };
+    const payload = await response.json() as {
+      cards: Array<{ front: string }>;
+      sourceTitle: string;
+      usage: { model: string; estimatedCostUsd: number };
+    };
     const openAIRequest = JSON.parse(String(capturedInit?.body));
 
     expect(response.status).toBe(200);
     expect(capturedUrl).toBe('https://api.openai.com/v1/responses');
-    expect(openAIRequest.model).toBe('test-model');
+    expect(openAIRequest.model).toBe('gpt-5.6-terra');
     expect(openAIRequest.store).toBe(false);
     expect(openAIRequest.instructions).toContain('Prefer mechanisms.');
     expect(openAIRequest.instructions).toContain('Focus on chapter two.');
     expect(openAIRequest.input[0].content[0].text).toContain('Existing question');
     expect(openAIRequest.input[0].content[1].text).toContain('This source contains enough words');
     expect(payload.cards[0]?.front).toBe('New question');
+    expect(payload.sourceTitle).toBe('Test source');
+    expect(payload.usage.model).toBe('gpt-5.6-terra');
+    expect(payload.usage.estimatedCostUsd).toBeCloseTo(0.00782);
   });
 });

@@ -14,5 +14,6 @@ if (!Blob.prototype.arrayBuffer) {
 
 afterEach(() => {
   cleanup();
+  if (typeof localStorage !== 'undefined') localStorage.clear();
   vi.unstubAllGlobals();
 });
