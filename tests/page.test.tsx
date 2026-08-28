@@ -68,6 +68,22 @@ describe('source dialog', () => {
 });
 
 describe('candidate review', () => {
+  test('turns a plain-text 413 response into a clear upload error', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('Payload Too Large', { status: 413 })));
+    render(<Home />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Paste text' }));
+    fireEvent.change(screen.getByLabelText('Notes or source text'), {
+      target: { value: 'This is a sufficiently long source paragraph for exercising response error handling safely.' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Use this text' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Generate candidates' }));
+
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toContain('server rejected this upload');
+    expect(alert.textContent).not.toContain('Unexpected token');
+  });
+
   test('sends both prompt levels, supports editing and selection, and avoids repeats when generating more', async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
       cards: [{

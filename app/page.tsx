@@ -21,6 +21,11 @@ type CandidateCard = {
   batch: number;
 };
 
+type GenerationPayload = {
+  cards?: Array<{ front: string; back: string; tags?: string[]; source_hint?: string }>;
+  error?: string;
+};
+
 const DEFAULT_GLOBAL_PROMPT =
   'Prioritize conceptual relationships, mechanisms, and questions that require active recall. Avoid trivia, vague prompts, and simple recognition.';
 
@@ -38,6 +43,20 @@ function humanSize(bytes: number) {
 
 function safeDeckName(name: string) {
   return name.replace(/\.[^/.]+$/, '').replace(/[\\/:*?"<>|]/g, '-').trim() || 'Laxu Flashcards';
+}
+
+async function readGenerationPayload(response: Response): Promise<GenerationPayload> {
+  const raw = await response.text();
+  try {
+    return JSON.parse(raw) as GenerationPayload;
+  } catch {
+    if (response.status === 413) {
+      return {
+        error: 'The server rejected this upload before it reached Laxu. Reload the app and try again; files up to 25 MB are supported.',
+      };
+    }
+    return { error: raw.trim() || 'The server returned an unreadable response. Please try again.' };
+  }
 }
 
 export default function Home() {
@@ -183,10 +202,7 @@ export default function Home() {
       if (source.url) form.set('url', source.url);
 
       const response = await fetch('/api/generate', { method: 'POST', body: form });
-      const payload = (await response.json()) as {
-        cards?: Array<{ front: string; back: string; tags?: string[]; source_hint?: string }>;
-        error?: string;
-      };
+      const payload = await readGenerationPayload(response);
       if (!response.ok || !payload.cards) throw new Error(payload.error || 'The cards could not be generated.');
 
       const batch = cards.reduce((highest, card) => Math.max(highest, card.batch), 0) + 1;
