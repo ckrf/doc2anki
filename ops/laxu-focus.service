@@ -1,0 +1,17 @@
+[Unit]
+Description=Laxu Focus flashcard studio
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/katriel/MyLaxu/laxu-ai
+Environment=NODE_ENV=production
+Environment=PATH=/home/katriel/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/home/katriel/MyLaxu/laxu-ai/node_modules/.bin/vinext start --hostname 0.0.0.0 --port 3000
+Restart=always
+RestartSec=3
+TimeoutStopSec=20
+
+[Install]
+WantedBy=default.target
