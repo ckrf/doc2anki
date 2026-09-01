@@ -3,6 +3,23 @@ import { describe, expect, test, vi } from 'vitest';
 
 import Home from '../app/page';
 
+const apkgSaveMock = vi.hoisted(() => vi.fn());
+
+vi.mock('apkg-browser-builder', () => {
+  class Collection { addDeck() {} }
+  class Deck { addCard() {} }
+  class Card {
+    setDue() {}
+    getNote() { return { setTags() {} }; }
+  }
+  return {
+    default: class ApkgBuilder { save = apkgSaveMock; },
+    Collection,
+    Deck,
+    Card,
+  };
+});
+
 function sourceFileInput() {
   return document.querySelector('#source-file') as HTMLInputElement;
 }
@@ -124,6 +141,10 @@ describe('candidate review', () => {
     fireEvent.click(screen.getByRole('checkbox', { name: 'Select card 1' }));
     expect(front.value).toBe('Edited question');
     expect((screen.getByRole('button', { name: 'Export 1 to Anki' }) as HTMLButtonElement).disabled).toBe(false);
+    await waitFor(() => {
+      const savedDraft = JSON.parse(String(localStorage.getItem('laxu-focus.review-draft.v1')));
+      expect(savedDraft.cards[0]).toMatchObject({ front: 'Edited question', back: 'Edited answer', selected: true });
+    });
 
     fireEvent.click(screen.getByRole('button', { name: 'Generate more' }));
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
@@ -160,5 +181,34 @@ describe('candidate review', () => {
     expect(screen.getByRole('heading', { name: 'Untitled PDF' })).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Generate candidates' }));
     expect(await screen.findByRole('heading', { name: 'Developmental Biology — Chapter 5.pdf' })).toBeTruthy();
+  });
+
+  test('restores an edited review draft after a refresh and can export it without another fetch', async () => {
+    apkgSaveMock.mockReset().mockResolvedValue(undefined);
+    localStorage.setItem('laxu-focus.review-draft.v1', JSON.stringify({
+      source: { kind: 'file', name: 'Saved chapter.pdf', detail: 'Saved PDF' },
+      documentPrompt: 'Saved document focus',
+      cards: [{
+        id: 'saved-card',
+        front: 'Saved edited question',
+        back: 'Saved edited answer',
+        tags: ['saved'],
+        sourceHint: 'Saved chapter',
+        selected: true,
+        revealed: false,
+        batch: 1,
+      }],
+    }));
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<Home />);
+    await screen.findByDisplayValue('Saved edited question');
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(screen.getByText(/saved candidate restored/i)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Export 1 to Anki' }));
+    await waitFor(() => expect(apkgSaveMock).toHaveBeenCalledWith('Saved chapter.apkg'));
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

@@ -1,6 +1,8 @@
 'use client';
 
 import { ChangeEvent, DragEvent, useEffect, useMemo, useRef, useState } from 'react';
+import ApkgBuilder, { Card, Collection, Deck } from 'apkg-browser-builder';
+import sqlWasmDataUrl from 'apkg-browser-builder/dist/sql-wasm-browser.wasm?inline';
 
 import {
   DEFAULT_MODEL_ID,
@@ -19,6 +21,7 @@ type Source = {
   content?: string;
   url?: string;
   autoTitle?: boolean;
+  restored?: boolean;
 };
 
 type CandidateCard = {
@@ -46,12 +49,18 @@ type GenerationPayload = {
 };
 
 type CostHistory = Partial<Record<ModelId, { costUsd: number; cards: number; runs: number }>>;
+type StoredReviewDraft = {
+  source: Pick<Source, 'kind' | 'name' | 'detail' | 'content' | 'url'>;
+  cards: CandidateCard[];
+  documentPrompt: string;
+};
 
 const DEFAULT_GLOBAL_PROMPT =
   'Prioritize conceptual relationships, mechanisms, and questions that require active recall. Avoid trivia, vague prompts, and simple recognition.';
 const GLOBAL_PROMPT_STORAGE_KEY = 'laxu-focus.global-prompt.v1';
 const MODEL_STORAGE_KEY = 'laxu-focus.model.v1';
 const COST_HISTORY_STORAGE_KEY = 'laxu-focus.cost-history.v1';
+const REVIEW_DRAFT_STORAGE_KEY = 'laxu-focus.review-draft.v1';
 const STARTING_INPUT_TOKENS_PER_CARD = 2_500;
 const STARTING_OUTPUT_TOKENS_PER_CARD = 200;
 
@@ -91,6 +100,75 @@ function formatUsd(value: number) {
   return `$${value.toFixed(3)}`;
 }
 
+function readReviewDraft(raw: string | null): StoredReviewDraft | null {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as Partial<StoredReviewDraft>;
+    const source = parsed.source;
+    if (
+      !source
+      || !['file', 'text', 'url'].includes(source.kind)
+      || typeof source.name !== 'string'
+      || typeof source.detail !== 'string'
+      || !Array.isArray(parsed.cards)
+    ) return null;
+
+    const cards = parsed.cards.filter((card): card is CandidateCard => Boolean(
+      card
+      && typeof card.id === 'string'
+      && typeof card.front === 'string'
+      && typeof card.back === 'string'
+      && Array.isArray(card.tags)
+      && card.tags.every((tag) => typeof tag === 'string')
+      && typeof card.sourceHint === 'string'
+      && typeof card.selected === 'boolean'
+      && typeof card.revealed === 'boolean'
+      && typeof card.batch === 'number',
+    )).slice(0, 500);
+    if (!cards.length) return null;
+    return {
+      source: {
+        kind: source.kind,
+        name: source.name.slice(0, 180),
+        detail: source.detail.slice(0, 500),
+        content: typeof source.content === 'string' ? source.content.slice(0, 350_000) : undefined,
+        url: typeof source.url === 'string' ? source.url : undefined,
+      },
+      cards,
+      documentPrompt: typeof parsed.documentPrompt === 'string' ? parsed.documentPrompt.slice(0, 8_000) : '',
+    };
+  } catch {
+    return null;
+  }
+}
+
+function saveAnkiTextBackup(cards: CandidateCard[], deckName: string) {
+  const cleanCell = (value: string) => value.replace(/\t/g, ' ').replace(/\r?\n/g, '<br>');
+  const rows = cards.map((card) => [
+    cleanCell(card.front.trim()),
+    cleanCell(card.back.trim()),
+    cleanCell([...new Set(['laxu-focus', ...card.tags])].join(' ')),
+  ].join('\t'));
+  const content = ['#separator:tab', '#html:true', '#columns:Front\tBack\tTags', ...rows].join('\n');
+  const blob = new Blob([content], { type: 'text/tab-separated-values;charset=utf-8' });
+  const href = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = href;
+  anchor.download = `${deckName}-Anki-backup.txt`;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  window.setTimeout(() => URL.revokeObjectURL(href), 1_000);
+}
+
+function embeddedWasmBinary() {
+  const base64 = sqlWasmDataUrl.slice(sqlWasmDataUrl.indexOf(',') + 1);
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+  return bytes.buffer;
+}
+
 async function readGenerationPayload(response: Response): Promise<GenerationPayload> {
   const raw = await response.text();
   try {
@@ -126,6 +204,7 @@ export default function Home() {
   const [textTitle, setTextTitle] = useState('Pasted notes');
   const [dragging, setDragging] = useState(false);
   const [filter, setFilter] = useState<'all' | 'selected'>('all');
+  const [draftReady, setDraftReady] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
 
   const selectedCount = cards.filter((card) => card.selected).length;
@@ -159,9 +238,47 @@ export default function Home() {
           localStorage.removeItem(COST_HISTORY_STORAGE_KEY);
         }
       }
+
+      const reviewDraft = readReviewDraft(localStorage.getItem(REVIEW_DRAFT_STORAGE_KEY));
+      if (reviewDraft) {
+        const canRegenerate = Boolean(reviewDraft.source.content || reviewDraft.source.url);
+        setSource({ ...reviewDraft.source, restored: !canRegenerate });
+        setCards(reviewDraft.cards);
+        setDocumentPrompt(reviewDraft.documentPrompt);
+        setSourceDialogOpen(false);
+        setNotice(`${reviewDraft.cards.length} saved candidate${reviewDraft.cards.length === 1 ? '' : 's'} restored for review and export.`);
+      }
+      setDraftReady(true);
     }, 0);
     return () => window.clearTimeout(restoreTimer);
   }, []);
+
+  useEffect(() => {
+    if (!draftReady) return;
+    const saveTimer = window.setTimeout(() => {
+      if (!source || cards.length === 0) {
+        localStorage.removeItem(REVIEW_DRAFT_STORAGE_KEY);
+        return;
+      }
+      const reviewDraft: StoredReviewDraft = {
+        source: {
+          kind: source.kind,
+          name: source.name,
+          detail: source.detail,
+          content: source.content?.slice(0, 350_000),
+          url: source.url,
+        },
+        cards,
+        documentPrompt,
+      };
+      try {
+        localStorage.setItem(REVIEW_DRAFT_STORAGE_KEY, JSON.stringify(reviewDraft));
+      } catch {
+        // The review remains usable in memory if browser storage is unavailable.
+      }
+    }, 150);
+    return () => window.clearTimeout(saveTimer);
+  }, [cards, documentPrompt, draftReady, source]);
 
   function saveGlobalPrompt() {
     localStorage.setItem(GLOBAL_PROMPT_STORAGE_KEY, globalPrompt);
@@ -307,6 +424,10 @@ export default function Home() {
       openSourceDialog();
       return;
     }
+    if (source.restored && !source.file && !source.content && !source.url) {
+      setError('Your saved cards are safe to edit and export. Re-add the original file before generating more cards from it.');
+      return;
+    }
     setLoading(true);
     setError('');
     setNotice('');
@@ -388,10 +509,9 @@ export default function Home() {
     if (!selected.length || !source) return;
     setExporting(true);
     setError('');
+    const deckName = safeDeckName(source.name);
     try {
-      const { default: ApkgBuilder, Collection, Deck, Card } = await import('apkg-browser-builder');
       const collection = new Collection();
-      const deckName = safeDeckName(source.name);
       const deck = new Deck(deckName, `Created with Laxu Focus from ${source.name}`);
       collection.addDeck(deck);
       selected.forEach((candidate, index) => {
@@ -400,11 +520,17 @@ export default function Home() {
         card.getNote()?.setTags([...new Set(['laxu-focus', ...candidate.tags.map((tag) => tag.replace(/\s+/g, '-'))])]);
         deck.addCard(card);
       });
-      const builder = new ApkgBuilder(collection);
+      const builder = new ApkgBuilder(collection, { sqljs: { wasmBinary: embeddedWasmBinary() } });
       await builder.save(`${deckName}.apkg`);
       setNotice(`${selected.length} selected card${selected.length === 1 ? '' : 's'} exported to Anki.`);
     } catch (caught) {
-      setError(caught instanceof Error ? `Anki export failed: ${caught.message}` : 'Anki export failed.');
+      try {
+        saveAnkiTextBackup(selected, deckName);
+        const reason = caught instanceof Error ? ` (${caught.message})` : '';
+        setNotice(`The .apkg builder was unavailable${reason}. Your ${selected.length} selected card${selected.length === 1 ? '' : 's'} were saved as an Anki-importable text backup instead.`);
+      } catch (backupError) {
+        setError(backupError instanceof Error ? `Anki export failed: ${backupError.message}` : 'Anki export failed.');
+      }
     } finally {
       setExporting(false);
     }
@@ -521,7 +647,7 @@ export default function Home() {
             <div className="bulk-row">
               <button onClick={() => setAllSelected(true)}>Select all</button>
               <button onClick={() => setAllSelected(false)}>Clear selection</button>
-              <span>Edits are included in your export.</span>
+              <span>Edits and selections are saved automatically for recovery.</span>
             </div>
 
             <div className="cards-list">

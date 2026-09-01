@@ -45,6 +45,7 @@ export default defineConfig(async () => {
   const { cloudflare } = await import('@cloudflare/vite-plugin');
 
   return {
+    assetsInclude: ['**/*.wasm', '**/*.wasm?inline'],
     css: { postcss: { plugins: [tailwindcss()] } },
     server: {
       // Make the local app reachable from other devices on the same trusted LAN.
