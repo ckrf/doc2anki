@@ -1,0 +1,30 @@
+[Unit]
+Description=MyLaxu shared flashcard studio
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=laxu-focus
+Group=laxu-focus
+WorkingDirectory=/srv/laxu-focus
+Environment=NODE_ENV=production
+EnvironmentFile=/etc/laxu-focus.env
+ExecStart=/usr/bin/npm run start -- --hostname 127.0.0.1 --port 3000
+Restart=always
+RestartSec=3
+TimeoutStopSec=20
+
+NoNewPrivileges=true
+PrivateDevices=true
+PrivateTmp=true
+ProtectControlGroups=true
+ProtectHome=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectSystem=full
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target

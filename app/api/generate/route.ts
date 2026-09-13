@@ -1,7 +1,26 @@
 import { DEFAULT_MODEL_ID, estimateTokenCostUsd, isModelId } from '../../../lib/model-catalog';
+import {
+  FixedWindowRateLimiter,
+  GenerationQueue,
+  GenerationQueueFullError,
+  positiveInteger,
+} from '../../../lib/generation-guard';
+import { assertPublicHttpUrl } from '../../../lib/public-url';
+import { authorizeGenerationRequest } from '../../../lib/server-access';
 
 const MAX_FILE_BYTES = 25 * 1024 * 1024;
 const MAX_SOURCE_CHARS = 350_000;
+const MAX_LINK_TEXT_BYTES = 5 * 1024 * 1024;
+const MAX_REDIRECTS = 5;
+const LINK_TIMEOUT_MS = 20_000;
+const generationRateLimiter = new FixedWindowRateLimiter(
+  positiveInteger(process.env.LAXU_REQUESTS_PER_HOUR, 20),
+  60 * 60 * 1_000,
+);
+const generationQueue = new GenerationQueue(
+  positiveInteger(process.env.LAXU_MAX_CONCURRENT_GENERATIONS, 2),
+  positiveInteger(process.env.LAXU_MAX_QUEUED_GENERATIONS, 20),
+);
 
 type OpenAIError = { error?: { message?: string } };
 type OpenAIUsage = {
@@ -47,6 +66,60 @@ function publicDocumentUrl(value: string) {
   return match ? `https://docs.google.com/document/d/${match[1]}/export?format=txt` : value;
 }
 
+async function readResponseBytes(response: Response, maximumBytes: number) {
+  const declaredLength = Number(response.headers.get('content-length'));
+  if (Number.isFinite(declaredLength) && declaredLength > maximumBytes) {
+    throw new Error('The linked source is too large.');
+  }
+  if (!response.body) return new Uint8Array();
+
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > maximumBytes) {
+      await reader.cancel();
+      throw new Error('The linked source is too large.');
+    }
+    chunks.push(value);
+  }
+
+  const joined = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    joined.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return joined;
+}
+
+async function fetchPublicSource(initialUrl: URL) {
+  let current = await assertPublicHttpUrl(initialUrl);
+
+  for (let redirects = 0; redirects <= MAX_REDIRECTS; redirects += 1) {
+    const response = await fetch(current, {
+      redirect: 'manual',
+      signal: AbortSignal.timeout(LINK_TIMEOUT_MS),
+      headers: { 'User-Agent': 'Laxu-Focus/1.0 (+flashcard-generator)', Accept: 'text/html,text/plain,application/pdf' },
+    });
+    if (![301, 302, 303, 307, 308].includes(response.status)) return { response, finalUrl: current };
+
+    const location = response.headers.get('location');
+    if (!location) throw new Error('The linked source returned an invalid redirect.');
+    if (redirects === MAX_REDIRECTS) throw new Error('The linked source redirected too many times.');
+    const next = await assertPublicHttpUrl(new URL(location, current));
+    if (current.protocol === 'https:' && next.protocol !== 'https:') {
+      throw new Error('The linked source redirected to an insecure address.');
+    }
+    current = next;
+  }
+
+  throw new Error('The linked source could not be loaded.');
+}
+
 async function fetchLinkedSource(value: string): Promise<{ content: SourceContent; note: string }> {
   let parsed: URL;
   try {
@@ -54,26 +127,21 @@ async function fetchLinkedSource(value: string): Promise<{ content: SourceConten
   } catch {
     throw new Error('The source link is not a valid URL.');
   }
-  if (!['http:', 'https:'].includes(parsed.protocol)) throw new Error('Only public http and https links are supported.');
-  const response = await fetch(parsed, {
-    redirect: 'follow',
-    headers: { 'User-Agent': 'Laxu-Focus/1.0 (+flashcard-generator)', Accept: 'text/html,text/plain,application/pdf' },
-  });
+  const { response, finalUrl } = await fetchPublicSource(parsed);
   if (!response.ok) throw new Error(`The linked source returned ${response.status}. Check that it is public.`);
   const contentType = response.headers.get('content-type') || '';
   if (contentType.includes('application/pdf')) {
-    const bytes = new Uint8Array(await response.arrayBuffer());
-    if (bytes.byteLength > MAX_FILE_BYTES) throw new Error('The linked PDF is larger than 25 MB.');
+    const bytes = await readResponseBytes(response, MAX_FILE_BYTES);
     return {
       content: {
         type: 'input_file',
-        filename: parsed.pathname.split('/').pop() || 'linked-source.pdf',
+        filename: finalUrl.pathname.split('/').pop() || 'linked-source.pdf',
         file_data: `data:application/pdf;base64,${bytesToBase64(bytes)}`,
       },
       note: 'the linked PDF',
     };
   }
-  const raw = await response.text();
+  const raw = new TextDecoder().decode(await readResponseBytes(response, MAX_LINK_TEXT_BYTES));
   const text = contentType.includes('html') ? stripHtml(raw) : raw.trim();
   if (text.length < 40) throw new Error('The linked page did not expose enough readable text.');
   return { content: { type: 'input_text', text: `SOURCE CONTENT:\n${text.slice(0, MAX_SOURCE_CHARS)}` }, note: value };
@@ -108,10 +176,7 @@ function responseOutputText(payload: Record<string, unknown>) {
   return '';
 }
 
-export async function POST(request: Request) {
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) return jsonError('OpenAI is not configured for this deployment yet.', 503);
-
+async function generateCards(request: Request, apiKey: string) {
   try {
     const form = await request.formData();
     const sourceKind = String(form.get('sourceKind') || '');
@@ -251,6 +316,36 @@ export async function POST(request: Request) {
       usage,
     });
   } catch (caught) {
+    return jsonError(caught instanceof Error ? caught.message : 'Card generation failed.', 500);
+  }
+}
+
+export async function POST(request: Request) {
+  const access = authorizeGenerationRequest(request);
+  if (!access.allowed) return jsonError(access.message, access.status);
+
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) return jsonError('OpenAI is not configured for this deployment yet.', 503);
+
+  const rateLimit = generationRateLimiter.take(access.actor);
+  if (!rateLimit.allowed) {
+    return Response.json(
+      { error: 'You have reached the hourly generation limit. Try again after the indicated wait.' },
+      { status: 429, headers: { 'Retry-After': String(rateLimit.retryAfterSeconds) } },
+    );
+  }
+
+  try {
+    const response = await generationQueue.run(() => generateCards(request, apiKey));
+    response.headers.set('X-RateLimit-Remaining', String(rateLimit.remaining));
+    return response;
+  } catch (caught) {
+    if (caught instanceof GenerationQueueFullError) {
+      return Response.json(
+        { error: 'MyLaxu is handling several generations right now. Please try again shortly.' },
+        { status: 503, headers: { 'Retry-After': '15' } },
+      );
+    }
     return jsonError(caught instanceof Error ? caught.message : 'Card generation failed.', 500);
   }
 }

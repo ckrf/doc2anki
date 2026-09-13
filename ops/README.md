@@ -17,3 +17,7 @@ Useful diagnostics:
 systemctl --user status laxu-focus.service
 journalctl --user -u laxu-focus.service -n 50 --no-pager
 ```
+
+For the external DigitalOcean deployment, use the production templates and
+checklist in [`ops/server/README.md`](server/README.md). The workstation service
+above remains intended only for the current local/LAN installation.

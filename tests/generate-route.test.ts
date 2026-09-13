@@ -7,12 +7,18 @@ import nextConfig from '../next.config';
 
 const originalApiKey = process.env.OPENAI_API_KEY;
 const originalModel = process.env.OPENAI_MODEL;
+const originalAuthRequired = process.env.LAXU_AUTH_REQUIRED;
+const originalAllowedEmails = process.env.LAXU_ALLOWED_EMAILS;
 
 afterEach(() => {
   if (originalApiKey === undefined) delete process.env.OPENAI_API_KEY;
   else process.env.OPENAI_API_KEY = originalApiKey;
   if (originalModel === undefined) delete process.env.OPENAI_MODEL;
   else process.env.OPENAI_MODEL = originalModel;
+  if (originalAuthRequired === undefined) delete process.env.LAXU_AUTH_REQUIRED;
+  else process.env.LAXU_AUTH_REQUIRED = originalAuthRequired;
+  if (originalAllowedEmails === undefined) delete process.env.LAXU_ALLOWED_EMAILS;
+  else process.env.LAXU_ALLOWED_EMAILS = originalAllowedEmails;
   vi.unstubAllGlobals();
 });
 
@@ -31,6 +37,21 @@ describe('POST /api/generate', () => {
 
     expect(response.status).toBe(503);
     expect(payload.error).toContain('OpenAI is not configured');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  test('rejects unauthenticated generation before reading the source or calling OpenAI', async () => {
+    process.env.OPENAI_API_KEY = 'test-key';
+    process.env.LAXU_AUTH_REQUIRED = 'true';
+    process.env.LAXU_ALLOWED_EMAILS = 'friend@example.com';
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    const response = await POST(new Request('https://laxu.example/api/generate', { method: 'POST' }));
+    const payload = await response.json() as { error: string };
+
+    expect(response.status).toBe(401);
+    expect(payload.error).toContain('Sign in');
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
