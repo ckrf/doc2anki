@@ -32,8 +32,10 @@ usage alerts. Initially allow that address and `johannes@founderspledge.com`.
 ## Server preparation
 
 Use an Ubuntu Droplet with at least 1 GB RAM; 2 GB is preferred. Install a
-supported Node.js 22 release and Git. Create an unprivileged `laxu-focus` user,
-and place a clean checkout at `/srv/laxu-focus` owned by that user.
+supported Node.js 22 release at `/opt/node22` so existing system Node users are
+not affected, and keep the system Git installation. Create an unprivileged
+`laxu-focus` user, and place a clean checkout at `/srv/laxu-focus` owned by that
+user.
 
 Install dependencies and validate the release from the checkout:
 
