@@ -10,7 +10,7 @@ the generation endpoint.
 
 ## Inputs to collect
 
-- A stable hostname such as `laxu.example.com`.
+- A stable hostname such as `doc2anki.com`.
 - A Cloudflare account and the email addresses that may sign in.
 - A dedicated OpenAI project service-account key for MyLaxu.
 - The Droplet IP, Ubuntu version, RAM, and SSH username.
@@ -20,21 +20,14 @@ Do not put passwords, SSH private keys, Cloudflare global keys, or the OpenAI
 key in Git, issues, or chat transcripts. A dashboard-managed Cloudflare Tunnel
 does not require sharing a Cloudflare API key with the application.
 
-## Domain registered at Squarespace
+## Domain and DNS
 
-The registration can stay at Squarespace. For Cloudflare's Free or Pro setup,
-add the existing domain to Cloudflare, carefully confirm that its current web
-and email DNS records were imported, and then replace the authoritative
-nameservers in Squarespace with the two nameservers Cloudflare assigns.
+The production domain is `doc2anki.com`, registered and hosted in Cloudflare.
+Cloudflare can therefore manage its Tunnel DNS record and Access policy
+directly. No Squarespace nameserver changes are needed for this domain.
 
-If DNSSEC is enabled, disable it before the nameserver change and re-enable it
-through Cloudflare after the zone becomes active. Do not change nameservers
-until the existing Squarespace and mail records are present in Cloudflare.
-
-Keeping authoritative DNS at Squarespace is also possible, but then this
-Tunnel/Access design is not available on Cloudflare's ordinary plans. That
-alternative needs public ports, a local HTTPS proxy, and a separate login
-mechanism.
+Use `katriel.friedman@gmail.com` as the administrative contact for service and
+usage alerts. Initially allow that address and `johannes@founderspledge.com`.
 
 ## Server preparation
 
@@ -69,13 +62,18 @@ In Cloudflare's dashboard:
 
 1. Create a remotely managed Tunnel and install the displayed `cloudflared`
    service command on the Droplet.
-2. Add a published application hostname such as `laxu.example.com`, with the
+2. Add the published application hostname `doc2anki.com`, with the
    service URL `http://localhost:3000`.
 3. Turn on **Protect with Access** for that hostname.
-4. Add the one-time PIN identity provider and an Allow policy containing the
-   invited email addresses. Set the policy to deny everyone else.
-5. Put the same normalized comma-separated addresses in
-   `LAXU_ALLOWED_EMAILS` and restart MyLaxu.
+4. Add the one-time PIN identity provider and an Allow policy containing
+   `katriel.friedman@gmail.com` and `johannes@founderspledge.com`. Anyone not
+   matching an Allow policy remains denied.
+5. Enable Access protection for the Tunnel route so `cloudflared` validates the
+   Access token before forwarding the authenticated email header.
+
+To invite another friend later, add their exact email address to this same
+Cloudflare Access Allow policy. `LAXU_ALLOWED_EMAILS` is deliberately blank in
+the server environment, so no app restart or redeployment is required.
 
 Use a DigitalOcean Cloud Firewall that permits SSH only from the administrator's
 trusted IP address. Do not open ports 3000, 80, or 443 for the Tunnel design.
