@@ -1,5 +1,5 @@
 [Unit]
-Description=Laxu Focus flashcard studio
+Description=Doc2Anki flashcard studio
 Wants=network-online.target
 After=network-online.target
 

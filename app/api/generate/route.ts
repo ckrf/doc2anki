@@ -14,12 +14,12 @@ const MAX_LINK_TEXT_BYTES = 5 * 1024 * 1024;
 const MAX_REDIRECTS = 5;
 const LINK_TIMEOUT_MS = 20_000;
 const generationRateLimiter = new FixedWindowRateLimiter(
-  positiveInteger(process.env.LAXU_REQUESTS_PER_HOUR, 20),
+  positiveInteger(process.env.DOC2ANKI_REQUESTS_PER_HOUR, 20),
   60 * 60 * 1_000,
 );
 const generationQueue = new GenerationQueue(
-  positiveInteger(process.env.LAXU_MAX_CONCURRENT_GENERATIONS, 2),
-  positiveInteger(process.env.LAXU_MAX_QUEUED_GENERATIONS, 20),
+  positiveInteger(process.env.DOC2ANKI_MAX_CONCURRENT_GENERATIONS, 2),
+  positiveInteger(process.env.DOC2ANKI_MAX_QUEUED_GENERATIONS, 20),
 );
 
 type OpenAIError = { error?: { message?: string } };
@@ -103,7 +103,7 @@ async function fetchPublicSource(initialUrl: URL) {
     const response = await fetch(current, {
       redirect: 'manual',
       signal: AbortSignal.timeout(LINK_TIMEOUT_MS),
-      headers: { 'User-Agent': 'Laxu-Focus/1.0 (+flashcard-generator)', Accept: 'text/html,text/plain,application/pdf' },
+      headers: { 'User-Agent': 'Doc2Anki/1.0 (+flashcard-generator)', Accept: 'text/html,text/plain,application/pdf' },
     });
     if (![301, 302, 303, 307, 308].includes(response.status)) return { response, finalUrl: current };
 
@@ -246,7 +246,7 @@ async function generateCards(request: Request, apiKey: string) {
     const existing = existingFronts.length
       ? `\nDo not repeat or lightly rephrase any of these existing fronts:\n- ${existingFronts.join('\n- ')}`
       : '';
-    const userPrompt = `Create exactly ${count} new candidate flashcards from “${sourceName}”. Give each 1–3 concise Anki-safe tags and a short source_hint identifying the relevant section, page if evident, or “${sourceNote}” if no more precise location is available.${existing}`;
+    const userPrompt = `Create exactly ${count} new candidate flashcards from “${sourceName}”. Give each 1–3 concise internal topic labels and a short source_hint identifying the relevant section, page if evident, or “${sourceNote}” if no more precise location is available. Write mathematical notation as LaTeX using \\(…\\) for inline math and \\[…\\] for display math so it renders in Anki.${existing}`;
 
     const response = await fetch('https://api.openai.com/v1/responses', {
       method: 'POST',
@@ -342,7 +342,7 @@ export async function POST(request: Request) {
   } catch (caught) {
     if (caught instanceof GenerationQueueFullError) {
       return Response.json(
-        { error: 'MyLaxu is handling several generations right now. Please try again shortly.' },
+        { error: 'Doc2Anki is handling several generations right now. Please try again shortly.' },
         { status: 503, headers: { 'Retry-After': '15' } },
       );
     }

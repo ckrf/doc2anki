@@ -1,6 +1,6 @@
-# Laxu Focus background service
+# Doc2Anki background service
 
-`laxu-focus.service` keeps the production server available on port 3000. The
+`doc2anki.service` keeps the production server available on port 3000. The
 installed user service starts at boot, restarts after unexpected exits, and
 does not depend on an open Codex task or terminal.
 
@@ -8,14 +8,14 @@ After changing application source, rebuild the app and restart the service:
 
 ```sh
 PATH=/home/katriel/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH ./node_modules/.bin/vinext build
-systemctl --user restart laxu-focus.service
+systemctl --user restart doc2anki.service
 ```
 
 Useful diagnostics:
 
 ```sh
-systemctl --user status laxu-focus.service
-journalctl --user -u laxu-focus.service -n 50 --no-pager
+systemctl --user status doc2anki.service
+journalctl --user -u doc2anki.service -n 50 --no-pager
 ```
 
 For the external DigitalOcean deployment, use the production templates and

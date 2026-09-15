@@ -4,13 +4,16 @@ import { describe, expect, test, vi } from 'vitest';
 import Home from '../app/page';
 
 const apkgSaveMock = vi.hoisted(() => vi.fn());
+const cardCreateMock = vi.hoisted(() => vi.fn());
+const noteSetTagsMock = vi.hoisted(() => vi.fn());
 
 vi.mock('apkg-browser-builder', () => {
   class Collection { addDeck() {} }
   class Deck { addCard() {} }
   class Card {
+    constructor(front: string, back: string) { cardCreateMock(front, back); }
     setDue() {}
-    getNote() { return { setTags() {} }; }
+    getNote() { return { setTags: noteSetTagsMock }; }
   }
   return {
     default: class ApkgBuilder { save = apkgSaveMock; },
@@ -134,7 +137,7 @@ describe('candidate review', () => {
     expect(firstForm.get('globalPrompt')).toBe('Global focus');
     expect(firstForm.get('documentPrompt')).toBe('Document focus');
     expect(firstForm.get('model')).toBe('gpt-5.6-terra');
-    expect(localStorage.getItem('laxu-focus.model.v1')).toBe('gpt-5.6-terra');
+    expect(localStorage.getItem('doc2anki.model.v1')).toBe('gpt-5.6-terra');
 
     const front = screen.getByLabelText('Front') as HTMLTextAreaElement;
     fireEvent.change(front, { target: { value: 'Edited question' } });
@@ -142,7 +145,7 @@ describe('candidate review', () => {
     expect(front.value).toBe('Edited question');
     expect((screen.getByRole('button', { name: 'Export 1 to Anki' }) as HTMLButtonElement).disabled).toBe(false);
     await waitFor(() => {
-      const savedDraft = JSON.parse(String(localStorage.getItem('laxu-focus.review-draft.v1')));
+      const savedDraft = JSON.parse(String(localStorage.getItem('doc2anki.review-draft.v1')));
       expect(savedDraft.cards[0]).toMatchObject({ front: 'Edited question', back: 'Edited answer', selected: true });
     });
 
@@ -158,7 +161,7 @@ describe('candidate review', () => {
     const prompt = screen.getByLabelText('Global study prompt') as HTMLTextAreaElement;
     fireEvent.change(prompt, { target: { value: 'Saved study preference' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save global prompt' }));
-    expect(localStorage.getItem('laxu-focus.global-prompt.v1')).toBe('Saved study preference');
+    expect(localStorage.getItem('doc2anki.global-prompt.v1')).toBe('Saved study preference');
 
     firstSession.unmount();
     render(<Home />);
@@ -185,13 +188,15 @@ describe('candidate review', () => {
 
   test('restores an edited review draft after a refresh and can export it without another fetch', async () => {
     apkgSaveMock.mockReset().mockResolvedValue(undefined);
-    localStorage.setItem('laxu-focus.review-draft.v1', JSON.stringify({
+    cardCreateMock.mockReset();
+    noteSetTagsMock.mockReset();
+    localStorage.setItem('doc2anki.review-draft.v1', JSON.stringify({
       source: { kind: 'file', name: 'Saved chapter.pdf', detail: 'Saved PDF' },
       documentPrompt: 'Saved document focus',
       cards: [{
         id: 'saved-card',
-        front: 'Saved edited question',
-        back: 'Saved edited answer',
+        front: 'What is $E=mc^2$?',
+        back: 'Energy: $$E=mc^2$$',
         tags: ['saved'],
         sourceHint: 'Saved chapter',
         selected: true,
@@ -203,12 +208,14 @@ describe('candidate review', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     render(<Home />);
-    await screen.findByDisplayValue('Saved edited question');
+    await screen.findByDisplayValue('What is $E=mc^2$?');
     expect(screen.queryByRole('dialog')).toBeNull();
     expect(screen.getByText(/saved candidate restored/i)).toBeTruthy();
 
     fireEvent.click(screen.getByRole('button', { name: 'Export 1 to Anki' }));
     await waitFor(() => expect(apkgSaveMock).toHaveBeenCalledWith('Saved chapter.apkg'));
+    expect(cardCreateMock).toHaveBeenCalledWith('What is \\(E=mc^2\\)?', 'Energy: \\[E=mc^2\\]');
+    expect(noteSetTagsMock).not.toHaveBeenCalled();
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });

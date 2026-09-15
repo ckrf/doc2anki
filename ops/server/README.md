@@ -12,7 +12,7 @@ the generation endpoint.
 
 - A stable hostname such as `doc2anki.com`.
 - A Cloudflare account and the email addresses that may sign in.
-- A dedicated OpenAI project service-account key for MyLaxu.
+- A dedicated OpenAI project service-account key for Doc2Anki.
 - The Droplet IP, Ubuntu version, RAM, and SSH username.
 - An administrator email for DigitalOcean and OpenAI usage alerts.
 
@@ -34,7 +34,7 @@ usage alerts. Initially allow that address and `johannes@founderspledge.com`.
 Use an Ubuntu Droplet with at least 1 GB RAM; 2 GB is preferred. Install a
 supported Node.js 22 release at `/opt/node22` so existing system Node users are
 not affected, and keep the system Git installation. Create an unprivileged
-`laxu-focus` user, and place a clean checkout at `/srv/laxu-focus` owned by that
+`doc2anki` user, and place a clean checkout at `/srv/doc2anki` owned by that
 user.
 
 Install dependencies and validate the release from the checkout:
@@ -46,15 +46,15 @@ pnpm test
 pnpm build
 ```
 
-Copy `laxu-focus.env.example` to `/etc/laxu-focus.env`, replace its placeholders,
-make it readable only by root, and install `laxu-focus.service` as a system
+Copy `doc2anki.env.example` to `/etc/doc2anki.env`, replace its placeholders,
+make it readable only by root, and install `doc2anki.service` as a system
 service. The service deliberately binds only to `127.0.0.1:3000`.
 
 ```sh
-sudo install -m 600 ops/server/laxu-focus.env.example /etc/laxu-focus.env
-sudo install -m 644 ops/server/laxu-focus.service /etc/systemd/system/laxu-focus.service
+sudo install -m 600 ops/server/doc2anki.env.example /etc/doc2anki.env
+sudo install -m 644 ops/server/doc2anki.service /etc/systemd/system/doc2anki.service
 sudo systemctl daemon-reload
-sudo systemctl enable --now laxu-focus.service
+sudo systemctl enable --now doc2anki.service
 curl --fail http://127.0.0.1:3000/api/health
 ```
 
@@ -74,7 +74,7 @@ In Cloudflare's dashboard:
    Access token before forwarding the authenticated email header.
 
 To invite another friend later, add their exact email address to this same
-Cloudflare Access Allow policy. `LAXU_ALLOWED_EMAILS` is deliberately blank in
+Cloudflare Access Allow policy. `DOC2ANKI_ALLOWED_EMAILS` is deliberately blank in
 the server environment, so no app restart or redeployment is required.
 
 Use a DigitalOcean Cloud Firewall that permits SSH only from the administrator's

@@ -1,4 +1,4 @@
-# Doc2Anki (MyLaxu / Laxu Focus)
+# Doc2Anki
 
 Doc2Anki turns uploaded or linked study material into editable flashcard
 candidates. Users can review cards with the answer hidden, edit or discard

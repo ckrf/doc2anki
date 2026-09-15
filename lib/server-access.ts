@@ -3,8 +3,9 @@ export type AccessDecision =
   | { allowed: false; status: 401 | 403; message: string };
 
 type AccessEnvironment = {
-  LAXU_AUTH_REQUIRED?: string;
-  LAXU_ALLOWED_EMAILS?: string;
+  DOC2ANKI_AUTH_REQUIRED?: string;
+  DOC2ANKI_ALLOWED_EMAILS?: string;
+  DOC2ANKI_ADMIN_EMAILS?: string;
 };
 
 const AUTHENTICATED_EMAIL_HEADERS = [
@@ -25,7 +26,7 @@ function normalizedEmails(value: string | undefined) {
   );
 }
 
-function authenticatedEmail(request: Request) {
+export function authenticatedEmail(request: Request) {
   for (const header of AUTHENTICATED_EMAIL_HEADERS) {
     const value = request.headers.get(header)?.trim().toLowerCase();
     if (value) return value;
@@ -38,7 +39,7 @@ export function authorizeGenerationRequest(
   environment: AccessEnvironment = process.env,
 ): AccessDecision {
   const email = authenticatedEmail(request);
-  const authRequired = enabled(environment.LAXU_AUTH_REQUIRED);
+  const authRequired = enabled(environment.DOC2ANKI_AUTH_REQUIRED);
 
   if (!authRequired && !email) {
     return { allowed: true, actor: 'local-development' };
@@ -48,18 +49,35 @@ export function authorizeGenerationRequest(
     return {
       allowed: false,
       status: 401,
-      message: 'Sign in through the MyLaxu access page before generating cards.',
+      message: 'Sign in through the Doc2Anki access page before generating cards.',
     };
   }
 
-  const allowedEmails = normalizedEmails(environment.LAXU_ALLOWED_EMAILS);
+  const allowedEmails = normalizedEmails(environment.DOC2ANKI_ALLOWED_EMAILS);
   if (allowedEmails.size > 0 && !allowedEmails.has(email)) {
     return {
       allowed: false,
       status: 403,
-      message: 'This account is not on the MyLaxu access list.',
+      message: 'This account is not on the Doc2Anki access list.',
     };
   }
 
+  return { allowed: true, actor: email };
+}
+
+export function authorizeAdminRequest(
+  request: Request,
+  environment: AccessEnvironment = process.env,
+): AccessDecision {
+  const email = authenticatedEmail(request);
+  const authRequired = enabled(environment.DOC2ANKI_AUTH_REQUIRED);
+
+  if (!authRequired && !email) return { allowed: true, actor: 'local-development' };
+  if (!email) return { allowed: false, status: 401, message: 'Sign in before opening Doc2Anki administration.' };
+
+  const admins = normalizedEmails(environment.DOC2ANKI_ADMIN_EMAILS);
+  if (!admins.has(email)) {
+    return { allowed: false, status: 403, message: 'Only a Doc2Anki administrator can manage friends.' };
+  }
   return { allowed: true, actor: email };
 }

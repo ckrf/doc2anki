@@ -4,6 +4,8 @@ import { ChangeEvent, DragEvent, useEffect, useMemo, useRef, useState } from 're
 import ApkgBuilder, { Card, Collection, Deck } from 'apkg-browser-builder';
 import sqlWasmDataUrl from 'apkg-browser-builder/dist/sql-wasm-browser.wasm?inline';
 
+import { createAnkiTextBackup, toAnkiHtml } from '../lib/anki-format';
+
 import {
   DEFAULT_MODEL_ID,
   MODEL_CATALOG,
@@ -57,10 +59,16 @@ type StoredReviewDraft = {
 
 const DEFAULT_GLOBAL_PROMPT =
   'Prioritize conceptual relationships, mechanisms, and questions that require active recall. Avoid trivia, vague prompts, and simple recognition.';
-const GLOBAL_PROMPT_STORAGE_KEY = 'laxu-focus.global-prompt.v1';
-const MODEL_STORAGE_KEY = 'laxu-focus.model.v1';
-const COST_HISTORY_STORAGE_KEY = 'laxu-focus.cost-history.v1';
-const REVIEW_DRAFT_STORAGE_KEY = 'laxu-focus.review-draft.v1';
+const GLOBAL_PROMPT_STORAGE_KEY = 'doc2anki.global-prompt.v1';
+const MODEL_STORAGE_KEY = 'doc2anki.model.v1';
+const COST_HISTORY_STORAGE_KEY = 'doc2anki.cost-history.v1';
+const REVIEW_DRAFT_STORAGE_KEY = 'doc2anki.review-draft.v1';
+const LEGACY_STORAGE_KEYS = {
+  globalPrompt: 'laxu-focus.global-prompt.v1',
+  model: 'laxu-focus.model.v1',
+  costHistory: 'laxu-focus.cost-history.v1',
+  reviewDraft: 'laxu-focus.review-draft.v1',
+};
 const STARTING_INPUT_TOKENS_PER_CARD = 2_500;
 const STARTING_OUTPUT_TOKENS_PER_CARD = 200;
 
@@ -77,7 +85,7 @@ function humanSize(bytes: number) {
 }
 
 function safeDeckName(name: string) {
-  return name.replace(/\.[^/.]+$/, '').replace(/[\\/:*?"<>|]/g, '-').trim() || 'Laxu Flashcards';
+  return name.replace(/\.[^/.]+$/, '').replace(/[\\/:*?"<>|]/g, '-').trim() || 'Doc2Anki Flashcards';
 }
 
 function isOpaqueFileName(name: string) {
@@ -143,13 +151,7 @@ function readReviewDraft(raw: string | null): StoredReviewDraft | null {
 }
 
 function saveAnkiTextBackup(cards: CandidateCard[], deckName: string) {
-  const cleanCell = (value: string) => value.replace(/\t/g, ' ').replace(/\r?\n/g, '<br>');
-  const rows = cards.map((card) => [
-    cleanCell(card.front.trim()),
-    cleanCell(card.back.trim()),
-    cleanCell([...new Set(['laxu-focus', ...card.tags])].join(' ')),
-  ].join('\t'));
-  const content = ['#separator:tab', '#html:true', '#columns:Front\tBack\tTags', ...rows].join('\n');
+  const content = createAnkiTextBackup(cards);
   const blob = new Blob([content], { type: 'text/tab-separated-values;charset=utf-8' });
   const href = URL.createObjectURL(blob);
   const anchor = document.createElement('a');
@@ -176,7 +178,7 @@ async function readGenerationPayload(response: Response): Promise<GenerationPayl
   } catch {
     if (response.status === 413) {
       return {
-        error: 'The server rejected this upload before it reached Laxu. Reload the app and try again; files up to 25 MB are supported.',
+        error: 'The server rejected this upload before it reached Doc2Anki. Reload the app and try again; files up to 25 MB are supported.',
       };
     }
     return { error: raw.trim() || 'The server returned an unreadable response. Please try again.' };
@@ -220,27 +222,35 @@ export default function Home() {
 
   useEffect(() => {
     const restoreTimer = window.setTimeout(() => {
-      const storedPrompt = localStorage.getItem(GLOBAL_PROMPT_STORAGE_KEY);
+      const storedPrompt = localStorage.getItem(GLOBAL_PROMPT_STORAGE_KEY) ?? localStorage.getItem(LEGACY_STORAGE_KEYS.globalPrompt);
       if (storedPrompt !== null) {
         setGlobalPrompt(storedPrompt);
         setSavedGlobalPrompt(storedPrompt);
+        localStorage.setItem(GLOBAL_PROMPT_STORAGE_KEY, storedPrompt);
       }
 
-      const storedModel = localStorage.getItem(MODEL_STORAGE_KEY);
-      if (storedModel && isModelId(storedModel)) setModelId(storedModel);
+      const storedModel = localStorage.getItem(MODEL_STORAGE_KEY) ?? localStorage.getItem(LEGACY_STORAGE_KEYS.model);
+      if (storedModel && isModelId(storedModel)) {
+        setModelId(storedModel);
+        localStorage.setItem(MODEL_STORAGE_KEY, storedModel);
+      }
 
-      const storedHistory = localStorage.getItem(COST_HISTORY_STORAGE_KEY);
+      const storedHistory = localStorage.getItem(COST_HISTORY_STORAGE_KEY) ?? localStorage.getItem(LEGACY_STORAGE_KEYS.costHistory);
       if (storedHistory) {
         try {
           const parsed = JSON.parse(storedHistory) as CostHistory;
-          if (parsed && typeof parsed === 'object') setCostHistory(parsed);
+          if (parsed && typeof parsed === 'object') {
+            setCostHistory(parsed);
+            localStorage.setItem(COST_HISTORY_STORAGE_KEY, storedHistory);
+          }
         } catch {
           localStorage.removeItem(COST_HISTORY_STORAGE_KEY);
         }
       }
 
-      const reviewDraft = readReviewDraft(localStorage.getItem(REVIEW_DRAFT_STORAGE_KEY));
+      const reviewDraft = readReviewDraft(localStorage.getItem(REVIEW_DRAFT_STORAGE_KEY) ?? localStorage.getItem(LEGACY_STORAGE_KEYS.reviewDraft));
       if (reviewDraft) {
+        localStorage.setItem(REVIEW_DRAFT_STORAGE_KEY, JSON.stringify(reviewDraft));
         const canRegenerate = Boolean(reviewDraft.source.content || reviewDraft.source.url);
         setSource({ ...reviewDraft.source, restored: !canRegenerate });
         setCards(reviewDraft.cards);
@@ -465,7 +475,7 @@ export default function Home() {
         id: uid(),
         front: card.front,
         back: card.back,
-        tags: card.tags?.length ? card.tags : ['laxu'],
+        tags: card.tags?.length ? card.tags : ['general'],
         sourceHint: card.source_hint || resolvedSourceName,
         selected: false,
         revealed: false,
@@ -512,12 +522,11 @@ export default function Home() {
     const deckName = safeDeckName(source.name);
     try {
       const collection = new Collection();
-      const deck = new Deck(deckName, `Created with Laxu Focus from ${source.name}`);
+      const deck = new Deck(deckName, `Created with Doc2Anki from ${source.name}`);
       collection.addDeck(deck);
       selected.forEach((candidate, index) => {
-        const card = new Card(candidate.front.trim(), candidate.back.trim());
+        const card = new Card(toAnkiHtml(candidate.front.trim()), toAnkiHtml(candidate.back.trim()));
         card.setDue(index + 1);
-        card.getNote()?.setTags([...new Set(['laxu-focus', ...candidate.tags.map((tag) => tag.replace(/\s+/g, '-'))])]);
         deck.addCard(card);
       });
       const builder = new ApkgBuilder(collection, { sqljs: { wasmBinary: embeddedWasmBinary() } });
@@ -539,11 +548,12 @@ export default function Home() {
   return (
     <main className="app-shell">
       <header className="topbar">
-        <div className="brand-mark">L</div>
+        <div className="brand-mark">D</div>
         <div className="brand-copy">
-          <strong>Laxu Focus</strong>
+          <strong>Doc2Anki</strong>
           <span>Flashcard studio</span>
         </div>
+        <a className="admin-link" href="/admin">Manage friends</a>
         <div className="topbar-status"><span /> {loading ? 'Generating candidates…' : 'Ready'}</div>
       </header>
 

@@ -2,7 +2,7 @@
 
 import { describe, expect, test } from 'vitest';
 
-import { authorizeGenerationRequest } from '../lib/server-access';
+import { authorizeAdminRequest, authorizeGenerationRequest } from '../lib/server-access';
 
 describe('generation access checks', () => {
   test('allows local development when external authentication is disabled', () => {
@@ -12,21 +12,21 @@ describe('generation access checks', () => {
 
   test('requires an authenticated email when protection is enabled', () => {
     const decision = authorizeGenerationRequest(
-      new Request('https://laxu.example/api/generate'),
-      { LAXU_AUTH_REQUIRED: 'true' },
+      new Request('https://doc2anki.example/api/generate'),
+      { DOC2ANKI_AUTH_REQUIRED: 'true' },
     );
     expect(decision).toMatchObject({ allowed: false, status: 401 });
   });
 
   test('accepts allowlisted Cloudflare and Sites identities case-insensitively', () => {
     const environment = {
-      LAXU_AUTH_REQUIRED: 'true',
-      LAXU_ALLOWED_EMAILS: 'owner@example.com, Friend@Example.com',
+      DOC2ANKI_AUTH_REQUIRED: 'true',
+      DOC2ANKI_ALLOWED_EMAILS: 'owner@example.com, Friend@Example.com',
     };
-    const cloudflare = authorizeGenerationRequest(new Request('https://laxu.example/api/generate', {
+    const cloudflare = authorizeGenerationRequest(new Request('https://doc2anki.example/api/generate', {
       headers: { 'Cf-Access-Authenticated-User-Email': 'friend@example.com' },
     }), environment);
-    const sites = authorizeGenerationRequest(new Request('https://laxu.example/api/generate', {
+    const sites = authorizeGenerationRequest(new Request('https://doc2anki.example/api/generate', {
       headers: { 'oai-authenticated-user-email': 'OWNER@EXAMPLE.COM' },
     }), environment);
 
@@ -35,12 +35,25 @@ describe('generation access checks', () => {
   });
 
   test('rejects authenticated users who are not allowlisted', () => {
-    const decision = authorizeGenerationRequest(new Request('https://laxu.example/api/generate', {
+    const decision = authorizeGenerationRequest(new Request('https://doc2anki.example/api/generate', {
       headers: { 'Cf-Access-Authenticated-User-Email': 'stranger@example.com' },
     }), {
-      LAXU_AUTH_REQUIRED: 'true',
-      LAXU_ALLOWED_EMAILS: 'owner@example.com',
+      DOC2ANKI_AUTH_REQUIRED: 'true',
+      DOC2ANKI_ALLOWED_EMAILS: 'owner@example.com',
     });
     expect(decision).toMatchObject({ allowed: false, status: 403 });
+  });
+
+  test('limits friend management to configured administrators', () => {
+    const environment = {
+      DOC2ANKI_AUTH_REQUIRED: 'true',
+      DOC2ANKI_ADMIN_EMAILS: 'admin@example.com',
+    };
+    expect(authorizeAdminRequest(new Request('https://doc2anki.example/admin', {
+      headers: { 'Cf-Access-Authenticated-User-Email': 'admin@example.com' },
+    }), environment)).toEqual({ allowed: true, actor: 'admin@example.com' });
+    expect(authorizeAdminRequest(new Request('https://doc2anki.example/admin', {
+      headers: { 'Cf-Access-Authenticated-User-Email': 'friend@example.com' },
+    }), environment)).toMatchObject({ allowed: false, status: 403 });
   });
 });

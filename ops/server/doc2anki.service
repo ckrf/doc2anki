@@ -1,15 +1,15 @@
 [Unit]
-Description=MyLaxu shared flashcard studio
+Description=Doc2Anki shared flashcard studio
 Wants=network-online.target
 After=network-online.target
 
 [Service]
 Type=simple
-User=laxu-focus
-Group=laxu-focus
-WorkingDirectory=/srv/laxu-focus
+User=doc2anki
+Group=doc2anki
+WorkingDirectory=/srv/doc2anki
 Environment=NODE_ENV=production
-EnvironmentFile=/etc/laxu-focus.env
+EnvironmentFile=/etc/doc2anki.env
 Environment=PATH=/opt/node22/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
 ExecStart=/opt/node22/bin/npm run start -- --hostname 127.0.0.1 --port 3000
 Restart=always

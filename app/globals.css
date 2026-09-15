@@ -54,8 +54,9 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .brand-copy { display: flex; flex-direction: column; line-height: 1.1; }
 .brand-copy strong { font-size: 15px; }
 .brand-copy span { margin-top: 4px; color: var(--muted); font-size: 11px; }
-.topbar-status { margin-left: auto; color: var(--muted); font-size: 12px; }
+.topbar-status { color: var(--muted); font-size: 12px; }
 .topbar-status span { display: inline-block; width: 7px; height: 7px; margin-right: 7px; border-radius: 99px; background: #45a276; }
+.admin-link { margin-left: auto; color: var(--green-dark); font-size: 11px; font-weight: 700; text-decoration: none; }
 
 .prompt-panel {
   overflow: auto;
@@ -182,6 +183,19 @@ textarea:focus { border-color: #65a58b; box-shadow: 0 0 0 3px rgba(23, 107, 80, 
 .source-form textarea { min-height: 180px; padding: 13px; resize: vertical; }
 .source-form p { margin: 0 0 8px; color: var(--muted); font-size: 10px; }
 .source-form .primary-button { align-self: flex-end; min-width: 130px; }
+
+.admin-shell { min-height: 100vh; background: var(--paper); }
+.admin-topbar .source-button { margin-left: auto; text-decoration: none; }
+.admin-panel { width: min(680px, calc(100% - 36px)); margin: 54px auto; padding: 34px; border: 1px solid var(--line); border-radius: 18px; background: #fff; }
+.admin-panel h1 { margin: 8px 0; font: 500 34px Georgia, serif; }
+.admin-panel > p { margin: 0 0 30px; color: var(--muted); font-size: 13px; line-height: 1.55; }
+.admin-add label { display: block; margin-bottom: 8px; font-size: 11px; font-weight: 800; }
+.admin-add > div { display: flex; gap: 9px; }
+.admin-add input { min-width: 0; flex: 1; padding: 0 13px; border: 1px solid #d4d7d1; border-radius: 9px; }
+.friends-list { display: grid; gap: 8px; margin-top: 28px; }
+.friends-list > div { display: flex; align-items: center; gap: 14px; padding: 13px 14px; border: 1px solid var(--line); border-radius: 10px; }
+.friends-list span { min-width: 0; flex: 1; overflow: hidden; font-size: 13px; text-overflow: ellipsis; }
+.friends-list button { border: 0; background: transparent; color: #a1534a; font-size: 11px; font-weight: 700; }
 
 @media (max-width: 850px) {
   .app-shell { display: block; }
