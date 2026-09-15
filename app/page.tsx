@@ -63,14 +63,26 @@ const GLOBAL_PROMPT_STORAGE_KEY = 'doc2anki.global-prompt.v1';
 const MODEL_STORAGE_KEY = 'doc2anki.model.v1';
 const COST_HISTORY_STORAGE_KEY = 'doc2anki.cost-history.v1';
 const REVIEW_DRAFT_STORAGE_KEY = 'doc2anki.review-draft.v1';
-const LEGACY_STORAGE_KEYS = {
-  globalPrompt: 'laxu-focus.global-prompt.v1',
-  model: 'laxu-focus.model.v1',
-  costHistory: 'laxu-focus.cost-history.v1',
-  reviewDraft: 'laxu-focus.review-draft.v1',
-};
 const STARTING_INPUT_TOKENS_PER_CARD = 2_500;
 const STARTING_OUTPUT_TOKENS_PER_CARD = 200;
+
+function storedValue(primaryKey: string) {
+  const current = localStorage.getItem(primaryKey);
+  if (current !== null) return current;
+
+  const namespaceSeparator = primaryKey.indexOf('.');
+  const keySuffix = namespaceSeparator >= 0 ? primaryKey.slice(namespaceSeparator) : primaryKey;
+  for (let index = 0; index < localStorage.length; index += 1) {
+    const candidateKey = localStorage.key(index);
+    if (!candidateKey || candidateKey === primaryKey || !candidateKey.endsWith(keySuffix)) continue;
+    const candidateValue = localStorage.getItem(candidateKey);
+    if (candidateValue === null) continue;
+    localStorage.setItem(primaryKey, candidateValue);
+    localStorage.removeItem(candidateKey);
+    return candidateValue;
+  }
+  return null;
+}
 
 function uid() {
   return typeof crypto !== 'undefined' && 'randomUUID' in crypto
@@ -222,35 +234,31 @@ export default function Home() {
 
   useEffect(() => {
     const restoreTimer = window.setTimeout(() => {
-      const storedPrompt = localStorage.getItem(GLOBAL_PROMPT_STORAGE_KEY) ?? localStorage.getItem(LEGACY_STORAGE_KEYS.globalPrompt);
+      const storedPrompt = storedValue(GLOBAL_PROMPT_STORAGE_KEY);
       if (storedPrompt !== null) {
         setGlobalPrompt(storedPrompt);
         setSavedGlobalPrompt(storedPrompt);
-        localStorage.setItem(GLOBAL_PROMPT_STORAGE_KEY, storedPrompt);
       }
 
-      const storedModel = localStorage.getItem(MODEL_STORAGE_KEY) ?? localStorage.getItem(LEGACY_STORAGE_KEYS.model);
+      const storedModel = storedValue(MODEL_STORAGE_KEY);
       if (storedModel && isModelId(storedModel)) {
         setModelId(storedModel);
-        localStorage.setItem(MODEL_STORAGE_KEY, storedModel);
       }
 
-      const storedHistory = localStorage.getItem(COST_HISTORY_STORAGE_KEY) ?? localStorage.getItem(LEGACY_STORAGE_KEYS.costHistory);
+      const storedHistory = storedValue(COST_HISTORY_STORAGE_KEY);
       if (storedHistory) {
         try {
           const parsed = JSON.parse(storedHistory) as CostHistory;
           if (parsed && typeof parsed === 'object') {
             setCostHistory(parsed);
-            localStorage.setItem(COST_HISTORY_STORAGE_KEY, storedHistory);
           }
         } catch {
           localStorage.removeItem(COST_HISTORY_STORAGE_KEY);
         }
       }
 
-      const reviewDraft = readReviewDraft(localStorage.getItem(REVIEW_DRAFT_STORAGE_KEY) ?? localStorage.getItem(LEGACY_STORAGE_KEYS.reviewDraft));
+      const reviewDraft = readReviewDraft(storedValue(REVIEW_DRAFT_STORAGE_KEY));
       if (reviewDraft) {
-        localStorage.setItem(REVIEW_DRAFT_STORAGE_KEY, JSON.stringify(reviewDraft));
         const canRegenerate = Boolean(reviewDraft.source.content || reviewDraft.source.url);
         setSource({ ...reviewDraft.source, restored: !canRegenerate });
         setCards(reviewDraft.cards);

@@ -168,6 +168,33 @@ describe('candidate review', () => {
     await waitFor(() => expect((screen.getByLabelText('Global study prompt') as HTMLTextAreaElement).value).toBe('Saved study preference'));
   });
 
+  test('migrates saved settings and an in-progress review from an earlier storage namespace', async () => {
+    localStorage.setItem('previous-app.global-prompt.v1', 'Migrated study preference');
+    localStorage.setItem('previous-app.review-draft.v1', JSON.stringify({
+      source: { kind: 'text', name: 'Migrated notes', detail: 'Pasted text' },
+      documentPrompt: 'Migrated document focus',
+      cards: [{
+        id: 'migrated-card',
+        front: 'Migrated question',
+        back: 'Migrated answer',
+        tags: ['saved'],
+        sourceHint: 'Migrated notes',
+        selected: true,
+        revealed: false,
+        batch: 1,
+      }],
+    }));
+
+    render(<Home />);
+
+    await screen.findByDisplayValue('Migrated question');
+    expect((screen.getByLabelText('Global study prompt') as HTMLTextAreaElement).value).toBe('Migrated study preference');
+    expect(localStorage.getItem('doc2anki.global-prompt.v1')).toBe('Migrated study preference');
+    expect(localStorage.getItem('doc2anki.review-draft.v1')).toContain('Migrated question');
+    expect(localStorage.getItem('previous-app.global-prompt.v1')).toBeNull();
+    expect(localStorage.getItem('previous-app.review-draft.v1')).toBeNull();
+  });
+
   test('replaces an opaque PDF identifier with the title inferred during generation', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
       sourceTitle: 'Developmental Biology — Chapter 5',
